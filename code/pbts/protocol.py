@@ -28,6 +28,7 @@ SHARED_TRAINING = {
 #               model because it depends on the architecture's structure.
 #   2026-11-19  Recorded 'grad_clip' per recipe (omitted before, not a change): nnU-Net clips at 12,
 #               Primus's own train_step clips at 1 (primus_trainers.py).
+#   2026-11-19  Verified SegMamba (clip 12, poly 0.9) and Swin UNETR (no clipping) recipes from their code.
 
 RECIPES = {
     "nnunet_resenc_l": {
@@ -45,15 +46,18 @@ RECIPES = {
     "segmamba": {
         "source": "ge-xing/SegMamba 3_train.py @ cff3597",
         "optimizer": "SGD", "lr": 1e-2, "momentum": 0.99, "nesterov": True, "weight_decay": 3e-5,
-        "schedule": "poly", "warmup_fraction": 0.0, "grad_clip": None,  # TO VERIFY in its light_training code
+        "schedule": "poly(exponent=0.9)", "warmup_fraction": 0.0, "grad_clip": 12.0,  # verified: light_training/trainer.py
         "deep_supervision": False, "batch_size": None,  # set by memory test
         "deviation": "out_chans 4 -> 5 (our label set); whole-head frame instead of 128^3; "
-                     "shared Dice+CE instead of its original CE-only loss",
+                     "shared Dice+CE instead of its original CE-only loss; nslices per stage set to the actual "
+                     "depth of each feature map (80/40/20/10 for our 160-slice frame) instead of the hard-coded "
+                     "64/32/16/8 for 128^3; poly lr updated per epoch instead of per step",
     },
     "swinunetr": {
-        "source": "MONAI SwinUNETR, BraTS21 research-contributions recipe (TO VERIFY against that code before use)",
+        "source": "MONAI SwinUNETR; recipe verified from Project-MONAI/research-contributions SwinUNETR/BRATS21 "
+                  "main.py + trainer.py (AMP, no gradient clipping)",
         "optimizer": "AdamW", "lr": 1e-4, "weight_decay": 1e-5,
-        "schedule": "linear warmup then cosine", "warmup_fraction": 50 / 300, "grad_clip": None,  # TO VERIFY
+        "schedule": "linear warmup then cosine", "warmup_fraction": 50 / 300, "grad_clip": None,  # None = no clipping
         "deep_supervision": False, "feature_size": 48,
         "gradient_checkpointing": True, "batch_size": 1,
         "deviation": "5-label softmax output instead of 3 sigmoid regions; trained from scratch; "

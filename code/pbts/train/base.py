@@ -46,7 +46,8 @@ class PBTSTrainerMixin:
         self.recipe = P.RECIPES[self.recipe_name]
         self.initial_lr = self.recipe["lr"] * float(self.run_cfg.get("lr_factor", 1.0))
         self.weight_decay = self.recipe["weight_decay"]
-        self.grad_clip = self.recipe.get("grad_clip") or 12.0
+        gc = self.recipe.get("grad_clip")
+        self.grad_clip = float(gc) if gc is not None else math.inf       # None in the recipe = no clipping
         self.save_every = 10 ** 9                    # nnU-Net's periodic save disabled; we manage checkpoints
         self.pbts_log = None
         self.global_step = 0

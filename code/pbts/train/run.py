@@ -25,6 +25,8 @@ from pbts import protocol as P
 MODELS = {
     "nnunet_resenc_l": "models.nnunet_resenc.trainer:PBTS_ResEncL",
     "primus_v2b": "models.primus.trainer:PBTS_PrimusV2B",
+    "segmamba": "models.segmamba.trainer:PBTS_SegMamba",
+    "swinunetr": "models.swinunetr.trainer:PBTS_SwinUNETR",
 }
 DEFAULT_CONFIG = "3d_wholehead"
 
@@ -187,7 +189,15 @@ def main():
     trainer = train(run_dir, cfg)
     scores = score_checkpoints(trainer, run_dir, cfg, keep_all_probs=a.keep_all_probs)
     floor = rescue_floor(run_dir, cfg)
+    try:
+        from pbts.report.run_report import build
+        build(run_dir)
+    except Exception as e:                                   # a report bug must not lose a finished run
+        if trainer.pbts_log:
+            trainer.pbts_log.event("report_failed", error=repr(e)[:500])
     missing = completeness(run_dir, cfg)
+    if not (run_dir / "report.html").exists():
+        missing.append("report.html")
     status = {"complete": not missing, "missing": missing, "checkpoint_scores": scores, "rescue_floor": floor,
               "rescue_triggered": (run_dir / "RESCUE_TRIGGER.json").exists(),
               "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
