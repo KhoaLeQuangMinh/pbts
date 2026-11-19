@@ -26,24 +26,26 @@ SHARED_TRAINING = {
 #               under-segments tiny regions; Dice-only (Swin UNETR's original) gives an all-or-nothing signal
 #               on absent regions. Either would confound architecture with loss. Deep supervision stays per
 #               model because it depends on the architecture's structure.
+#   2026-11-19  Recorded 'grad_clip' per recipe (omitted before, not a change): nnU-Net clips at 12,
+#               Primus's own train_step clips at 1 (primus_trainers.py).
 
 RECIPES = {
     "nnunet_resenc_l": {
         "source": "nnunetv2 nnUNetTrainer + nnUNetResEncUNetLPlans (3d_fullres architecture)",
         "optimizer": "SGD", "lr": 1e-2, "momentum": 0.99, "nesterov": True, "weight_decay": 3e-5,
-        "schedule": "poly(exponent=0.9)", "warmup_fraction": 0.0,
+        "schedule": "poly(exponent=0.9)", "warmup_fraction": 0.0, "grad_clip": 12.0,
         "deep_supervision": True, "batch_size": 2,
     },
     "primus_v2b": {
         "source": "nnunetv2 nnUNet_PrimusV2B_Trainer (AbstractPrimus)",
         "optimizer": "AdamW", "lr": 3e-4, "betas": (0.9, 0.98), "weight_decay": 5e-2,
-        "schedule": "linear warmup then poly", "warmup_fraction": 50 / 1000,
+        "schedule": "linear warmup then poly", "warmup_fraction": 50 / 1000, "grad_clip": 1.0,
         "deep_supervision": False, "drop_path": 0.2, "batch_size": 1,
     },
     "segmamba": {
         "source": "ge-xing/SegMamba 3_train.py @ cff3597",
         "optimizer": "SGD", "lr": 1e-2, "momentum": 0.99, "nesterov": True, "weight_decay": 3e-5,
-        "schedule": "poly", "warmup_fraction": 0.0,
+        "schedule": "poly", "warmup_fraction": 0.0, "grad_clip": None,  # TO VERIFY in its light_training code
         "deep_supervision": False, "batch_size": None,  # set by memory test
         "deviation": "out_chans 4 -> 5 (our label set); whole-head frame instead of 128^3; "
                      "shared Dice+CE instead of its original CE-only loss",
@@ -51,7 +53,7 @@ RECIPES = {
     "swinunetr": {
         "source": "MONAI SwinUNETR, BraTS21 research-contributions recipe (TO VERIFY against that code before use)",
         "optimizer": "AdamW", "lr": 1e-4, "weight_decay": 1e-5,
-        "schedule": "linear warmup then cosine", "warmup_fraction": 50 / 300,
+        "schedule": "linear warmup then cosine", "warmup_fraction": 50 / 300, "grad_clip": None,  # TO VERIFY
         "deep_supervision": False, "feature_size": 48,
         "gradient_checkpointing": True, "batch_size": 1,
         "deviation": "5-label softmax output instead of 3 sigmoid regions; trained from scratch; "
