@@ -152,6 +152,22 @@ def completeness(run_dir: Path, cfg: dict):
     return missing
 
 
+def _process_alive(info):
+    """Is the process that wrote a lock still alive? (same host: check its pid; SLURM job: ask squeue)."""
+    job = info.get("slurm_job_id")
+    if job:
+        import subprocess
+        out = subprocess.run(["squeue", "-h", "-j", str(job)], capture_output=True, text=True).stdout
+        return bool(out.strip())
+    if info.get("host") == os.uname().nodename and info.get("pid"):
+        try:
+            os.kill(int(info["pid"]), 0)
+            return True
+        except OSError:
+            return False
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, choices=list(MODELS))
@@ -186,25 +202,37 @@ def main():
         cfg["monitor_cases"] = old["monitor_cases"]
     json.dump(cfg, open(cfg_path, "w"), indent=1, default=str)
 
-    trainer = train(run_dir, cfg)
-    scores = score_checkpoints(trainer, run_dir, cfg, keep_all_probs=a.keep_all_probs)
-    floor = rescue_floor(run_dir, cfg)
+    lock = run_dir / "RUNNING.lock"                            # one process per run directory
+    if lock.exists():
+        old = json.load(open(lock))
+        same_job = old.get("slurm_job_id") and old.get("slurm_job_id") == os.environ.get("SLURM_JOB_ID")
+        if not same_job and _process_alive(old):
+            sys.exit(f"{run_dir} is locked by {old}: another process is running this run")
+    json.dump({"slurm_job_id": os.environ.get("SLURM_JOB_ID"), "pid": os.getpid(), "host": os.uname().nodename,
+               "started": time.strftime("%Y-%m-%dT%H:%M:%S")}, open(lock, "w"))
     try:
-        from pbts.report.run_report import build
-        build(run_dir)
-    except Exception as e:                                   # a report bug must not lose a finished run
+        trainer = train(run_dir, cfg)
+        scores = score_checkpoints(trainer, run_dir, cfg, keep_all_probs=a.keep_all_probs)
+        floor = rescue_floor(run_dir, cfg)
+        try:
+            from pbts.report.run_report import build
+            build(run_dir)
+        except Exception as e:                                   # a report bug must not lose a finished run
+            if trainer.pbts_log:
+                trainer.pbts_log.event("report_failed", error=repr(e)[:500])
+        missing = completeness(run_dir, cfg)
+        if not (run_dir / "report.html").exists():
+            missing.append("report.html")
+        status = {"complete": not missing, "missing": missing, "checkpoint_scores": scores, "rescue_floor": floor,
+                  "rescue_triggered": (run_dir / "RESCUE_TRIGGER.json").exists(),
+                  "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        json.dump(status, open(run_dir / ("COMPLETE.json" if not missing else "INCOMPLETE.json"), "w"), indent=1)
         if trainer.pbts_log:
-            trainer.pbts_log.event("report_failed", error=repr(e)[:500])
-    missing = completeness(run_dir, cfg)
-    if not (run_dir / "report.html").exists():
-        missing.append("report.html")
-    status = {"complete": not missing, "missing": missing, "checkpoint_scores": scores, "rescue_floor": floor,
-              "rescue_triggered": (run_dir / "RESCUE_TRIGGER.json").exists(),
-              "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
-    json.dump(status, open(run_dir / ("COMPLETE.json" if not missing else "INCOMPLETE.json"), "w"), indent=1)
-    if trainer.pbts_log:
-        trainer.pbts_log.event("run_finished", **{k: v for k, v in status.items() if k != "checkpoint_scores"})
-        trainer.pbts_log.close(exit_code=0 if not missing else 2)
+            trainer.pbts_log.event("run_finished", **{k: v for k, v in status.items() if k != "checkpoint_scores"})
+            trainer.pbts_log.close(exit_code=0 if not missing else 2)
+    finally:
+        if lock.exists() and json.load(open(lock)).get("pid") == os.getpid():
+            lock.unlink()
     print(json.dumps(status, indent=1))
     sys.exit(0 if not missing else 2)
 

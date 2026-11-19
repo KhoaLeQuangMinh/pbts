@@ -40,14 +40,51 @@ def our_jobs():
     return jobs
 
 
+ACTIVE_S = 45 * 60
+
+
 def run_dir(model, tag, k):
     return C.RUNS_DIR / model / tag / f"fold_{k}"
+
+
+def recently_written(d: Path) -> bool:
+    """True if anything under the run dir changed in the last ACTIVE_S seconds (covers runs started outside the
+    queue, e.g. the pilots, and the scoring phase after training)."""
+    if not d.exists():
+        return False
+    now = time.time()
+    for p in d.rglob("*"):
+        try:
+            if now - p.stat().st_mtime < ACTIVE_S:
+                return True
+        except FileNotFoundError:
+            pass
+    return False
+
+
+def lock_alive(d: Path, jobs) -> bool:
+    lk = d / "RUNNING.lock"
+    if not lk.exists():
+        return False
+    try:
+        job = json.load(open(lk)).get("slurm_job_id")
+    except Exception:
+        return True
+    return job is None or any(j["id"] == str(job) for j in jobs)
+
+
+def tag_for(model, base, samples):
+    """'default' if the existing fold-0 run (e.g. the pilot) used this training length, else a length-specific tag."""
+    d = run_dir(model, base, 0)
+    if (d / "run_config.json").exists() and json.load(open(d / "run_config.json")).get("samples") != samples:
+        return f"{base}_s{samples // 1000}k"
+    return base
 
 
 def status(model, tag, k, jobs):
     d = run_dir(model, tag, k)
     name = f"{model}__{tag}__f{k}"
-    if any(j["name"] == name for j in jobs):
+    if any(j["name"] == name for j in jobs) or lock_alive(d, jobs) or recently_written(d):
         return "queued_or_running"
     if (d / "RESCUE_TRIGGER.json").exists():
         return "rescue"
@@ -60,15 +97,16 @@ def status(model, tag, k, jobs):
     return "todo"
 
 
-def plan_runs(plan, jobs, state):
+def plan_runs(plan, jobs, state, samples):
     """Ordered list of (model, tag, fold, lr_factor, gres_options) that should run now."""
     todo, report = [], {}
     for m in plan["models"]:
         model, gres = m["model"], m["gres"]
-        s0 = status(model, "default", 0, jobs)
-        tag, lr = "default", 1.0
+        base = tag_for(model, "default", samples)
+        s0 = status(model, base, 0, jobs)
+        tag, lr = base, 1.0
         if s0 == "rescue":
-            tag, lr = "rescue_lr3", 1 / 3
+            tag, lr = tag_for(model, "rescue_lr3", samples), 1 / 3
             s0 = status(model, tag, 0, jobs)
             if s0 == "rescue":
                 report[model] = "NOT TRAINABLE under the protocol (fold 0 failed with default and lr/3)"
@@ -114,7 +152,7 @@ def main():
     state = json.load(open(STATE)) if STATE.exists() else {"submissions": {}}
     while True:
         jobs = our_jobs()
-        todo, report = plan_runs(plan, jobs, state)
+        todo, report = plan_runs(plan, jobs, state, samples)
         busy = {g: sum(1 for j in jobs if g in j["gres"]) for g in ("a100:", SLICE)}
         free_slots = plan.get("max_jobs", 2) - len(jobs)
         for model, tag, k, lr, gres_opts in todo:
