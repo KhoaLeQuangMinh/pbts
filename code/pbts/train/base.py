@@ -71,6 +71,8 @@ class PBTSTrainerMixin:
         if hasattr(self, "warmup_duration_whole_net"):          # warmup trainers (Primus): same fraction
             self.warmup_duration_whole_net = max(1, round(self.recipe.get("warmup_fraction", 0.0) * self.num_epochs))
         self._frac_epoch = {f: max(1, round(f / 100 * self.num_epochs)) - 1 for f in FRACTIONS}
+        # prediction uses the training input size: whole-head frame, or sliding 128^3 windows for the pilot
+        self.frame_xyz = tuple(reversed(self.configuration_manager.patch_size))
 
     def get_dataloaders(self):
         import nnunetv2.training.nnUNetTrainer.nnUNetTrainer as T
@@ -286,7 +288,8 @@ class PBTSTrainerMixin:
         self.network.eval()
         self.set_deep_supervision_enabled(False)
         try:
-            rows, summary, images = run_monitor(self.network, self.run_cfg["monitor_cases"], ep, self.run_cfg["run_dir"])
+            rows, summary, images = run_monitor(self.network, self.run_cfg["monitor_cases"], ep, self.run_cfg["run_dir"],
+                                                frame_xyz=self.frame_xyz)
             self.pbts_log.monitor({"epoch": ep, "global_step": self.global_step, "rows": rows, "summary": summary,
                                    "seconds": time.time() - t0}, images)
         finally:

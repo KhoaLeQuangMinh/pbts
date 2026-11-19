@@ -124,9 +124,10 @@ def write_outputs(case: str, probs: np.ndarray, rec: dict, out_dir, save_probs: 
 
 
 def predict_cases(network, cases, out_dir, tta=True, save_probs=True, allow_locked=False, purpose="",
-                  device="cuda", log=None):
+                  device="cuda", log=None, frame_xyz=C.FRAME_XYZ):
+    """frame_xyz = the run's training input size: the whole-head frame, or 128^3 (sliding windows) for the pilot."""
     check_not_locked(cases, allow_locked=allow_locked, purpose=purpose)
-    pred = Predictor(network, device=device)
+    pred = Predictor(network, device=device, frame_xyz=frame_xyz)
     rows = []
     for case in cases:
         probs, rec, timing = pred.predict_case(case, tta=tta)

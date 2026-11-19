@@ -102,8 +102,8 @@ def _picture(case, x, gt, pred, path, title):
 
 
 @torch.no_grad()
-def run_monitor(network, cases, epoch, out_dir, n_pictures=3, device="cuda"):
-    pred = Predictor(network, device=device)
+def run_monitor(network, cases, epoch, out_dir, n_pictures=3, device="cuda", frame_xyz=C.FRAME_XYZ):
+    pred = Predictor(network, device=device, frame_xyz=frame_xyz)
     rows, images = [], []
     for i, case in enumerate(cases):
         x, rec, gt = _cached_case(case)

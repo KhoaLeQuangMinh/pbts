@@ -82,6 +82,7 @@ def train(run_dir: Path, cfg: dict):
                           dataset_json=load_json(str(pre / "dataset.json")), device=torch.device("cuda"))
     if final:
         trainer.initialize()
+        trainer.frame_xyz = tuple(reversed(trainer.configuration_manager.patch_size))
         return trainer
     if latest:
         trainer.load_checkpoint(str(latest[0]))
@@ -106,7 +107,7 @@ def score_checkpoints(trainer, run_dir: Path, cfg: dict, keep_all_probs=False):
         (trainer.network._orig_mod if hasattr(trainer.network, "_orig_mod") else trainer.network).load_state_dict(state)
         t0 = time.time()
         predict_cases(trainer.network, cases, out, tta=True, save_probs=(f == 100 or keep_all_probs),
-                      log=trainer.print_to_log_file)
+                      log=trainer.print_to_log_file, frame_xyz=trainer.frame_xyz)
         df = evaluate(cases, out / "predictions", out, workers=12)
         results[f] = {"predict_eval_s": time.time() - t0,
                       "WT_off_global_dsc_mean": float(df[df.region == "WT"].off_global_dsc.mean())}
