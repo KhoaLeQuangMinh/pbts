@@ -211,5 +211,18 @@ class RunLogger:
                 pass
 
 
+def _jsonl_safe(p):
+    p = Path(p)
+    if not p.exists():
+        return []
+    out = []
+    for line in open(p):
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:      # a line cut by a crash/requeue must not break replay
+            pass
+    return out
+
+
 def log_crash(logger: "RunLogger", exc: BaseException, **ctx):
     logger.event("crash", error=repr(exc), traceback=traceback.format_exc(), **ctx)
