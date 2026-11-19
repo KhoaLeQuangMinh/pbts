@@ -11,33 +11,51 @@ live elsewhere in pbts and are identical for every model.
 # schedules and warmups keep the same FRACTION of training as in the original code.
 TRAINING_SAMPLES = None   # set after the pilot, in a separate commit
 
+# Shared training pipeline (identical for every model, like the augmentation):
+SHARED_TRAINING = {
+    "loss": "nnU-Net DC_and_CE_loss: soft Dice (smooth=1e-5, background excluded, per-sample since "
+            "batch_dice=False in the plan) + cross-entropy, weights 1:1",
+    "augmentation": "nnU-Net default training transforms",
+    "deep_supervision_weights": "nnU-Net default (halving per level, lowest level dropped) where the "
+                                "architecture has decoder levels",
+}
+
+# Amendments (dated; made before any training run existed):
+#   2026-11-19  Loss moved from per-model recipe to SHARED_TRAINING (Dice + CE for all).
+#               Reason: labels are often absent (ED ~78%, CC ~65% of scans). CE-only (SegMamba's original)
+#               under-segments tiny regions; Dice-only (Swin UNETR's original) gives an all-or-nothing signal
+#               on absent regions. Either would confound architecture with loss. Deep supervision stays per
+#               model because it depends on the architecture's structure.
+
 RECIPES = {
     "nnunet_resenc_l": {
         "source": "nnunetv2 nnUNetTrainer + nnUNetResEncUNetLPlans (3d_fullres architecture)",
         "optimizer": "SGD", "lr": 1e-2, "momentum": 0.99, "nesterov": True, "weight_decay": 3e-5,
         "schedule": "poly(exponent=0.9)", "warmup_fraction": 0.0,
-        "loss": "Dice + CE", "deep_supervision": True, "batch_size": 2,
+        "deep_supervision": True, "batch_size": 2,
     },
     "primus_v2b": {
         "source": "nnunetv2 nnUNet_PrimusV2B_Trainer (AbstractPrimus)",
         "optimizer": "AdamW", "lr": 3e-4, "betas": (0.9, 0.98), "weight_decay": 5e-2,
         "schedule": "linear warmup then poly", "warmup_fraction": 50 / 1000,
-        "loss": "Dice + CE", "deep_supervision": False, "drop_path": 0.2, "batch_size": 1,
+        "deep_supervision": False, "drop_path": 0.2, "batch_size": 1,
     },
     "segmamba": {
         "source": "ge-xing/SegMamba 3_train.py @ cff3597",
         "optimizer": "SGD", "lr": 1e-2, "momentum": 0.99, "nesterov": True, "weight_decay": 3e-5,
         "schedule": "poly", "warmup_fraction": 0.0,
-        "loss": "CE only (as in the original code)", "deep_supervision": False, "batch_size": None,  # set by memory test
-        "deviation": "out_chans 4 -> 5 (our label set); whole-head frame instead of 128^3",
+        "deep_supervision": False, "batch_size": None,  # set by memory test
+        "deviation": "out_chans 4 -> 5 (our label set); whole-head frame instead of 128^3; "
+                     "shared Dice+CE instead of its original CE-only loss",
     },
     "swinunetr": {
         "source": "MONAI SwinUNETR, BraTS21 research-contributions recipe (TO VERIFY against that code before use)",
         "optimizer": "AdamW", "lr": 1e-4, "weight_decay": 1e-5,
         "schedule": "linear warmup then cosine", "warmup_fraction": 50 / 300,
-        "loss": "Dice (TO VERIFY)", "deep_supervision": False, "feature_size": 48,
+        "deep_supervision": False, "feature_size": 48,
         "gradient_checkpointing": True, "batch_size": 1,
-        "deviation": "5-label softmax output instead of 3 sigmoid regions; trained from scratch",
+        "deviation": "5-label softmax output instead of 3 sigmoid regions; trained from scratch; "
+                     "shared Dice+CE instead of its original Dice-only loss",
     },
 }
 

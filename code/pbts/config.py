@@ -22,6 +22,13 @@ DATASET_NAME = "Dataset502_PBTSHead"   # only the 234 development cases live her
 RUNS_DIR = ROOT / "runs"
 REPORTS_DIR = ROOT / "reports"
 
+# W&B mirror (local files are the master copy). Project is PRIVATE, so monitor pictures may be mirrored.
+# The entity (account) name is personal, so it lives in secrets/, not in git.
+WANDB_PROJECT = "Ped-BraTS"
+WANDB_ENTITY_FILE = ROOT / "secrets/wandb_entity"
+WANDB_KEY_FILE = ROOT / "secrets/wandb_key"
+WANDB_LOG_IMAGES = True   # only ever True for a private project (BraTS data-use terms)
+
 # ---------------------------------------------------------------- data definition
 CHANNELS = ("FLAIR", "T1", "T1CE", "T2")          # file suffixes _0000 .. _0003
 LABELS = {"background": 0, "ET": 1, "NET": 2, "CC": 3, "ED": 4}
