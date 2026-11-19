@@ -1,6 +1,6 @@
 # Patient data and anything derived from it never goes to git (BraTS data-use terms).
-Dataset/
-data/
+/Dataset/
+/data/
 *.nii
 *.nii.gz
 *.nii.gz.part
@@ -11,9 +11,9 @@ data/
 *.tsv
 *.png
 *.jpg
-runs/
-reports/
-nnunet/
+/runs/
+/reports/
+/nnunet/
 
 # secrets
 secrets/
