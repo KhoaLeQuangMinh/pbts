@@ -22,7 +22,8 @@ DATASET_NAME = "Dataset502_PBTSHead"   # only the 234 development cases live her
 RUNS_DIR = ROOT / "runs"
 REPORTS_DIR = ROOT / "reports"
 
-# W&B mirror (local files are the master copy). Project is PRIVATE, so monitor pictures may be mirrored.
+# W&B mirror (local files are the master copy). Project visibility is TEAM; every team member signed the
+# BraTS-PEDs data agreement, so monitor pictures may be mirrored. Never set the project to Public.
 # The entity (account) name is personal, so it lives in secrets/, not in git.
 WANDB_PROJECT = "Ped-BraTS"
 WANDB_ENTITY_FILE = ROOT / "secrets/wandb_entity"
