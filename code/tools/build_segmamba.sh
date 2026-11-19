@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build SegMamba's bundled CUDA extensions (causal_conv1d 1.0.0, mamba_ssm 1.0.1 with bimamba v3) into env/.
-# Run on the server inside a SLURM job:  srun -p gpu -c 8 --mem=24G -t 02:00:00 bash scripts/build_segmamba.sh
+# Run on the server inside a SLURM job:  srun -p gpu -c 8 --mem=24G -t 02:00:00 bash tools/build_segmamba.sh
 set -euo pipefail
 P=/data/khoalq/pbts
 export CUDA_HOME=$P/cuda124 PATH=$P/cuda124/bin:$PATH TORCH_CUDA_ARCH_LIST="8.0" MAX_JOBS=${MAX_JOBS:-8}
