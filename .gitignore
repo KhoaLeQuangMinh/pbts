@@ -1,0 +1,32 @@
+# Patient data and anything derived from it never goes to git (BraTS data-use terms).
+Dataset/
+data/
+*.nii
+*.nii.gz
+*.nii.gz.part
+*.b2nd
+*.npz
+*.npy
+*.pkl
+*.tsv
+*.png
+*.jpg
+runs/
+reports/
+nnunet/
+
+# secrets
+secrets/
+*.key
+*token*
+.env
+wandb/
+.wandb/
+
+# python / editors
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+.vscode/
