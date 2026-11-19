@@ -21,7 +21,32 @@ from pbts import protocol as P
 
 STATE = C.ROOT / "logs" / "queue_state.json"
 LOG = C.ROOT / "logs" / "queue.log"
-SLICE = "a100_3g.20gb"
+
+# GPU choice: the smallest GPU the run fits on (user rule, 2026-11-20). Usable memory per SLURM gres type, GiB.
+# The a100_2g.10gb_mps slice is shared with other users through MPS and is never used.
+GPU_GB = {"a100_2g.10gb": 9.75, "a100_3g.20gb": 19.5, "a100": 39.4}
+PEAK_MARGIN, CONTEXT_GB = 1.15, 1.0   # measured torch peak x 1.15 + 1 GiB (CUDA context, allocator fragmentation)
+
+
+def fitting_gres(m):
+    """GPU types a plan entry fits on, smallest first, from its measured training peak (`peak_GB`, torch
+    max_memory_allocated at the configuration and batch size it will train with). Unmeasured -> full A100 only.
+    An explicit `gres` list in the plan overrides this."""
+    if m.get("gres"):
+        return list(m["gres"])
+    peak = m.get("peak_GB")
+    if peak is None:
+        return ["a100"]
+    need = peak * PEAK_MARGIN + CONTEXT_GB
+    fits = [g for g, cap in sorted(GPU_GB.items(), key=lambda kv: kv[1]) if need <= cap]
+    if not fits:
+        raise SystemExit(f"{m['model']}: needs ~{need:.1f} GiB, more than any GPU here")
+    return fits
+
+
+def gres_type(job_gres: str) -> str:
+    """'gres/gpu:a100_3g.20gb:1' -> 'a100_3g.20gb'."""
+    return job_gres.split("gpu:", 1)[-1].rsplit(":", 1)[0]
 
 
 def log(msg):
@@ -101,7 +126,7 @@ def plan_runs(plan, jobs, state, samples):
     """Ordered list of (model, tag, fold, lr_factor, gres_options) that should run now."""
     todo, report = [], {}
     for m in plan["models"]:
-        model, gres = m["model"], m["gres"]
+        model, gres = m["model"], fitting_gres(m)
         base = tag_for(model, "default", samples)
         s0 = status(model, base, 0, jobs)
         tag, lr = base, 1.0
@@ -128,7 +153,7 @@ def plan_runs(plan, jobs, state, samples):
 
 def submit(model, tag, k, lr, gres, samples, wandb, dry):
     name = f"{model}__{tag}__f{k}"
-    cmd = ["sbatch", "--parsable", "-J", name, f"--gres=gpu:{gres}:1"] + (["-c", "14"] if gres == SLICE else []) + \
+    cmd = ["sbatch", "--parsable", "-J", name, f"--gres=gpu:{gres}:1"] + (["-c", "14"] if gres != "a100" else []) + \
           ["slurm/train.sbatch", "--model", model, "--fold", str(k), "--tag", tag, "--samples", str(samples),
            "--lr_factor", repr(lr)] + ([] if wandb else ["--no_wandb"])
     if dry:
@@ -153,7 +178,7 @@ def main():
     while True:
         jobs = our_jobs()
         todo, report = plan_runs(plan, jobs, state, samples)
-        busy = {g: sum(1 for j in jobs if g in j["gres"]) for g in ("a100:", SLICE)}
+        busy = {g: sum(1 for j in jobs if gres_type(j["gres"]) == g) for g in GPU_GB}
         free_slots = plan.get("max_jobs", 2) - len(jobs)
         for model, tag, k, lr, gres_opts in todo:
             if free_slots <= 0:
@@ -163,13 +188,13 @@ def main():
             if status(model, tag, k, jobs) == "stopped" and n_prev >= 2:
                 report[model] = report.get(model, "") + f" | {name} stopped twice: needs a human"
                 continue
-            free = [g for g in gres_opts if busy.get("a100:" if g == "a100" else g, 0) == 0]
+            free = [g for g in gres_opts if busy.get(g, 0) == 0]   # smallest fitting GPU that is free
             if not free:
                 continue
             g = free[0]
             jid = submit(model, tag, k, lr, g, samples, plan.get("wandb", True), a.dry_run)
             state["submissions"].setdefault(name, []).append({"job": jid, "gres": g, "time": time.strftime("%Y-%m-%dT%H:%M:%S")})
-            busy["a100:" if g == "a100" else g] = busy.get("a100:" if g == "a100" else g, 0) + 1
+            busy[g] = busy.get(g, 0) + 1
             free_slots -= 1
         if not a.dry_run:
             json.dump(state, open(STATE, "w"), indent=1)

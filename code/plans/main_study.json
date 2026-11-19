@@ -1,11 +1,11 @@
 {
-  "note": "Main study order (ResEnc -> Primus -> SegMamba -> Swin UNETR). ResEnc fold 0 is the whole-head pilot run (tag 'default'). Training length comes from protocol.TRAINING_SAMPLES once the pilot fixes it. gres: allowed GPU types in order of preference; the 20 GB slice only for models measured to fit it.",
+  "note": "Main study order (ResEnc -> Primus -> SegMamba -> Swin UNETR). ResEnc fold 0 is the whole-head pilot run (tag 'default'). Training length comes from protocol.TRAINING_SAMPLES once the pilot fixes it. GPU: the queue picks the smallest free GPU that fits peak_GB x 1.15 + 1 GiB (10 GB slice < 20 GB slice < full A100; see queue.fitting_gres). peak_GB = measured torch max_memory_allocated in a training step at the configuration and batch size the model trains with; null = not measured yet -> full A100 only. An explicit 'gres' list overrides.",
   "max_jobs": 2,
   "wandb": true,
   "models": [
-    {"model": "nnunet_resenc_l", "gres": ["a100"]},
-    {"model": "primus_v2b", "gres": ["a100", "a100_3g.20gb"]},
-    {"model": "segmamba", "gres": ["a100"]},
-    {"model": "swinunetr", "gres": ["a100"]}
+    {"model": "nnunet_resenc_l", "peak_GB": 18.1, "peak_source": "pilot run default/fold_0, 3d_wholehead, batch 2 (128^3 would be 6.2)"},
+    {"model": "primus_v2b", "peak_GB": 13.9, "peak_source": "smoke run primus_v2b/smoke, 3d_wholehead, batch 1"},
+    {"model": "segmamba", "peak_GB": null, "peak_source": "to fill from validation job 2740 (bench_a4)"},
+    {"model": "swinunetr", "peak_GB": null, "peak_source": "to fill from validation job 2740 (bench_a4)"}
   ]
 }
