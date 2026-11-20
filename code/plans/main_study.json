@@ -6,7 +6,6 @@
     {"model": "nnunet_resenc_l", "peak_GB": 18.1, "peak_source": "pilot run default/fold_0, 3d_wholehead, batch 2 (128^3 would be 6.2)"},
     {"model": "primus_v2b", "peak_GB": 13.9, "peak_source": "smoke run primus_v2b/smoke, 3d_wholehead, batch 1"},
     {"model": "segmamba", "peak_GB": 23.2, "peak_source": "smoke run segmamba/smoke (job 2745), 3d_wholehead, batch 1; batch 2 OOM on 40 GB"},
-    {"model": "swinunetr", "peak_GB": 17.1, "peak_source": "bench_a4 on the full A100 (job 2745), batch 1; the real trainer ran out of memory on the 20 GB slice (job 2740)",
-     "gres": ["a100"], "hold": "waiting for the Swin smoke run on the full A100 (job 2750)"}
+    {"model": "swinunetr", "peak_GB": 17.6, "peak_source": "smoke run swinunetr/smoke (job 2750, COMPLETE), 3d_wholehead, batch 1; ran out of memory on the 20 GB slice (job 2740)"}
   ]
 }
