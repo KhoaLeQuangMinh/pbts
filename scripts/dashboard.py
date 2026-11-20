@@ -4,8 +4,9 @@
     python3 scripts/dashboard.py            # refresh once and open the page
     python3 scripts/dashboard.py --watch    # keep refreshing every 60 s (Ctrl+C to stop)
 
-Fetches read-only status from the server (python -m pbts.final.status over ssh) and writes
-dashboard/index.html, which reloads itself every minute. No scan images; nothing on the server is changed.
+Fetches read-only status from both servers (python -m pbts.final.status --machine <name> over ssh), merges them
+(each fold is shown by the machine it is assigned to) and writes dashboard/index.html, which reloads itself every
+minute. No scan images; nothing on the servers is changed.
 """
 import argparse
 import html
@@ -19,18 +20,42 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "dashboard" / "index.html"
 CACHE = ROOT / "dashboard" / "last_status.json"
-REMOTE = "cd /data/khoalq/pbts/code && ../env/bin/python -m pbts.final.status"
+MACHINES = {"gpu-a240": "/data/khoalq/pbts", "blackwell": "/home/khoalq/pbts"}
 STATE_LABEL = {"complete": "done", "running": "running", "queued": "queued", "todo": "to run", "blocked": "waiting",
-               "rescue": "rescue triggered", "incomplete": "incomplete", "stopped": "stopped"}
+               "rescue": "rescue triggered", "incomplete": "incomplete", "stopped": "stopped", "unknown": "no status"}
 NAMES = {"nnunet_resenc_l": "nnU-Net ResEnc L", "primus_v2b": "PrimusV2-B", "segmamba": "SegMamba", "swinunetr": "Swin UNETR"}
 
 
-def fetch():
-    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "gpu-a240", REMOTE],
+def fetch(machine):
+    cmd = f"cd {MACHINES[machine]}/code && ../env/bin/python -m pbts.final.status --machine {machine}"
+    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", machine, cmd],
                        capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip()[-400:] or f"ssh exit {r.returncode}")
     return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def merge(st):
+    """One view: every fold cell comes from the machine it is assigned to (the other one reports 'elsewhere')."""
+    base = next(iter(st.values()))
+    grid = []
+    for i, row in enumerate(base["grid"]):
+        folds = []
+        for k in range(len(row["folds"])):
+            pick = next((s["grid"][i]["folds"][k] for s in st.values() if s["grid"][i]["folds"][k].get("state") != "elsewhere"),
+                        None)
+            if pick is None:                                   # assigned machine not reachable right now
+                m = row["folds"][k].get("machine", "?")
+                pick = {"state": "unknown", "machine": m, "dir": row["folds"][k].get("dir")}
+            folds.append(pick)
+        tag = next((s["grid"][i]["tag"] for s in st.values() if s["grid"][i]["folds"][0].get("state") != "elsewhere"), row["tag"])
+        grid.append({**row, "folds": folds, "tag": tag})
+    out = {**base, "grid": grid, "machines": st,
+           "jobs": [{**j, "machine": m} for m, s in st.items() for j in s["jobs"]],
+           "pilot_and_extra": [{**r, "machine": m} for m, s in st.items() for r in s["pilot_and_extra"]],
+           "tests": [{**r, "machine": m} for m, s in st.items() for r in s["tests"]],
+           "generated": " · ".join(f"{m} {s['generated'][11:16]}" for m, s in st.items())}
+    return out
 
 
 REASONS = {"QOSMaxJobsPerUserLimit": "waiting for a free job slot (your 2-job limit)",
@@ -105,7 +130,8 @@ def cell(r, length_fixed=True):
         sub = (r.get("rescue") or {}).get("trigger", "")
     elif st in ("incomplete", "stopped"):
         sub = "needs a look"
-    return f'<td class="s-{st}"><b>{STATE_LABEL.get(st, st)}</b><small>{e(sub)}</small></td>'
+    mach = f"<small class='mach'>{e(r.get('machine', ''))}</small>" if r.get("machine") else ""
+    return f'<td class="s-{st}"><b>{STATE_LABEL.get(st, st)}</b><small>{e(sub)}</small>{mach}</td>'
 
 
 def next_actions(s):
@@ -116,10 +142,11 @@ def next_actions(s):
         acts.append(f"Waiting for the whole-head pilot to fix the training length "
                     f"(ETA {fmt_h(pilot.get('eta_h'))}). Main-study runs are shown with a provisional "
                     f"{s['provisional_samples']:,} samples.")
-    elif not s["server"]["queue_daemon_running"]:
-        todo = sum(1 for row in grid for c in row["folds"] if c.get("state") in ("todo", "stopped"))
-        if todo:
-            acts.append(f"The run queue is not running and {todo} run(s) are ready: start it on the server.")
+    else:
+        for m, ms in s.get("machines", {}).items():
+            todo = sum(1 for row in grid for c in row["folds"] if c.get("state") in ("todo", "stopped") and c.get("machine") == m)
+            if todo and not ms["server"]["queue_daemon_running"]:
+                acts.append(f"{m}: the run queue is not running and {todo} run(s) are ready there.")
     for row in grid:
         for k, c in enumerate(row["folds"]):
             if c.get("state") in ("incomplete", "stopped"):
@@ -133,6 +160,8 @@ def next_actions(s):
     pend = [j for j in s["jobs"] if j["state"] == "PENDING"]
     if pend:
         acts.append("Pending SLURM jobs: " + ", ".join(f"{j['name']} ({reason(j['reason'])})" for j in pend))
+    for m, err in s.get("errors", {}).items():
+        acts.append(f"{m}: could not refresh ({err[:160]}); showing its last known status.")
     return acts or ["Nothing needs attention."]
 
 
@@ -166,7 +195,8 @@ td.s-blocked{background:var(--todo);color:var(--muted)}td.s-rescue,td.s-incomple
 table.plain{border-spacing:0}table.plain td,table.plain th{background:none;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:6px 8px}
 ul.acts{margin:0;padding-left:18px}ul.acts li{margin:4px 0}
 .banner{background:var(--warn);border:1px solid var(--warn-b);border-radius:10px;padding:10px 12px;margin-top:12px}
-details summary{cursor:pointer;color:var(--muted)}
+details summary{cursor:pointer;color:var(--muted)}small.mach{opacity:.75;font-size:10.5px}
+td.s-unknown{background:var(--warn)}
 """
 
 
@@ -175,29 +205,38 @@ def render(s, error=None):
     cells = [c for row in grid for c in row["folds"]]
     n_total = len(cells)
     count = lambda st: sum(1 for c in cells if c.get("state") == st)
-    running = [(f"{NAMES.get(row['model'], row['model'])} · fold {k} · {row['tag']}", c)
+    running = [(f"{NAMES.get(row['model'], row['model'])} · fold {k} · {row['tag']} · {c.get('machine', '')}", c)
                for row in grid for k, c in enumerate(row["folds"]) if c.get("state") == "running"]
-    running += [(r["dir"], r) for r in s["pilot_and_extra"] if r.get("state") == "running"]
-    gpus = "".join(f"<tr><td>GPU {e(g['index'])}</td><td>{e(g['name'])}</td><td>{g['mem_used_GB']} / {g['mem_total_GB']} GB</td>"
-                   f"<td>{'—' if g['util'] is None else str(g['util']) + '%'}</td></tr>" for g in s["server"]["gpus"])
-    jobs = "".join(f"<tr><td>{e(j['id'])}</td><td>{e(j['name'])}</td><td>{e(j['state'])}</td><td>{e(j['gres'])}</td>"
+    running += [(f"{r['dir']} · {r.get('machine', '')}", r) for r in s["pilot_and_extra"] if r.get("state") == "running"]
+    machines = s.get("machines", {"server": s})
+    gpus = "".join(f"<tr><td>{e(m)}</td><td>GPU {e(g['index'])}</td><td>{e(g['name'])}</td><td>{g['mem_used_GB']} / {g['mem_total_GB']} GB</td>"
+                   f"<td>{'—' if g['util'] is None else str(g['util']) + '%'}</td></tr>"
+                   for m, ms in machines.items() for g in ms["server"]["gpus"])
+    disks = "".join(f"<p class='muted'>{e(m)}: disk {e(ms['server']['data_disk']['used'])} used of {e(ms['server']['data_disk']['size'])} "
+                    f"({e(ms['server']['data_disk']['use'])}), runs folder {e(ms['server']['runs_size'])} · GPU processes (all users) "
+                    f"{e(ms['server'].get('gpu_processes'))}"
+                    + (f" · node CPUs alloc/idle/other/total {e(ms['server']['node_cpus_alloc_idle_other_total'])} · free RAM "
+                       f"{e(ms['server']['node_free_mem_GB'])} GB" if ms['server'].get('node_cpus_alloc_idle_other_total') else "")
+                    + "</p>" for m, ms in machines.items())
+    queues = " · ".join(f"{m}: {'running' if ms['server']['queue_daemon_running'] else 'off'}" for m, ms in machines.items())
+    jobs = "".join(f"<tr><td>{e(j.get('machine', ''))}</td><td>{e(j['id'])}</td><td>{e(j['name'])}</td><td>{e(j['state'])}</td><td>{e(j['gres'])}</td>"
                    f"<td>{e(j['elapsed'])}</td><td>{e(j['time_left'])}</td><td>{e(reason(j['reason']) if j['state'] == 'PENDING' else j['reason'])}</td></tr>" for j in s["jobs"]) \
-        or "<tr><td colspan=7 class='muted'>No jobs.</td></tr>"
+        or "<tr><td colspan=8 class='muted'>No jobs.</td></tr>"
     matrix = "".join(f"<tr><th>{e(NAMES.get(row['model'], row['model']))}<small>{e(row['tag'])}"
                      f"{' · rescue (lr/3)' if row.get('rescue_tag') else ''}</small></th>"
                      + "".join(cell(c, s["training_samples_fixed"]) for c in row["folds"]) + "</tr>" for row in grid)
-    extra = "".join(f"<tr><td>{e(r['dir'])}</td><td>{e(STATE_LABEL.get(r.get('state'), r.get('state')))}</td>"
+    extra = "".join(f"<tr><td>{e(r['dir'])} <span class='muted'>{e(r.get('machine', ''))}</span></td><td>{e(STATE_LABEL.get(r.get('state'), r.get('state')))}</td>"
                     f"<td>{e(r.get('epoch'))}/{e(r.get('num_epochs'))}</td><td>{fmt_h(r.get('eta_h')) if r.get('state') == 'running' else ''}</td>"
                     f"<td>{e(r.get('last_event'))}</td></tr>" for r in s["pilot_and_extra"]) \
         or "<tr><td colspan=5 class='muted'>None.</td></tr>"
-    tests = "".join(f"<tr><td>{e(r['dir'])}</td><td>{e(STATE_LABEL.get(r.get('state'), r.get('state')))}</td><td>{e(r.get('last_event'))}</td></tr>"
+    tests = "".join(f"<tr><td>{e(r['dir'])} <span class='muted'>{e(r.get('machine', ''))}</span></td><td>{e(STATE_LABEL.get(r.get('state'), r.get('state')))}</td><td>{e(r.get('last_event'))}</td></tr>"
                     for r in s["tests"])
-    srv = s["server"]
     samples = f"{s['training_samples']:,}" if s["training_samples_fixed"] else f"not fixed yet (provisional {s['provisional_samples']:,})"
-    banner = f'<div class="banner">Could not refresh: {e(error)}. Showing data from {e(s["generated"])}.</div>' if error else ""
+    errs = dict(s.get("errors") or {}, **({"all": error} if error else {}))
+    banner = "".join(f'<div class="banner">{e(m)}: could not refresh ({e(x[:200])}); showing its last known status.</div>' for m, x in errs.items())
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="60"><title>PBTS study status</title><style>{CSS}</style></head><body><main>
-<div class="top"><h1>PBTS study status</h1><span class="muted">server status at {e(s['generated'])} · page reloads every minute</span></div>
+<div class="top"><h1>PBTS study status</h1><span class="muted">status at {e(s['generated'])} · page reloads every minute</span></div>
 {banner}
 <div class="tiles">
  <div class="tile"><b>{count('complete')}/{n_total}</b><span>main-study runs done</span></div>
@@ -206,17 +245,17 @@ def render(s, error=None):
  <div class="tile"><b>{count('todo')}</b><span>{'ready to run' if s['training_samples_fixed'] else 'to run (after length is fixed)'}</span></div>
  <div class="tile"><b>{count('blocked')}</b><span>waiting (on fold 0, or model on hold)</span></div>
  <div class="tile"><b style="font-size:15px">{e(samples)}</b><span>training length (samples)</span></div>
- <div class="tile"><b style="font-size:15px">{'running' if srv['queue_daemon_running'] else 'not running'}</b><span>run queue</span></div>
+ <div class="tile"><b style="font-size:13px">{e(queues)}</b><span>run queues</span></div>
  <div class="tile"><b style="font-size:15px">{'done' if s['locked_test_done'] else 'not yet'}</b><span>locked test (once, at the end)</span></div>
 </div>
 <h2>Needs attention / next</h2><ul class="acts">{''.join(f'<li>{e(a)}</li>' for a in next_actions(s))}</ul>
 <h2>Running now</h2><div class="cards">{''.join(run_card(r, t) for t, r in running) or '<p class="muted">Nothing running.</p>'}</div>
 <h2>Main study: models × inner folds</h2><div class="tablewrap"><table><tr><th></th>{''.join(f'<th>fold {k}</th>' for k in range(5))}</tr>{matrix}</table></div>
-<p class="muted" style="font-size:12px">Order: ResEnc → Primus → SegMamba → Swin UNETR. Folds 1–4 start only after fold 0 passes the rescue check. ResEnc fold 0 is the whole-head pilot run.</p>
+<p class="muted" style="font-size:12px">Each cell names the machine it runs on (folds of every model are spread over gpu-a240 and blackwell). Fold 0 of every model runs first; folds 1–4 start only after fold 0 passes the rescue check, wherever it ran. ResEnc fold 0 is the whole-head pilot run.</p>
 <h2>Pilot and other runs</h2><div class="tablewrap"><table class="plain"><tr><th>run</th><th>state</th><th>epoch</th><th>ETA</th><th>last event</th></tr>{extra}</table></div>
-<h2>SLURM jobs (yours)</h2><div class="tablewrap"><table class="plain"><tr><th>job</th><th>name</th><th>state</th><th>GPU</th><th>elapsed</th><th>time left</th><th>reason / node</th></tr>{jobs}</table></div>
-<h2>Server</h2><div class="tablewrap"><table class="plain"><tr><th>GPU</th><th>model</th><th>memory</th><th>utilisation</th></tr>{gpus}</table></div>
-<p class="muted">/data: {e(srv['data_disk']['used'])} used of {e(srv['data_disk']['size'])} ({e(srv['data_disk']['use'])}), runs folder {e(srv['runs_size'])} · node CPUs alloc/idle/other/total {e(srv['node_cpus_alloc_idle_other_total'])} · free RAM {e(srv['node_free_mem_GB'])} GB</p>
+<h2>Jobs (yours)</h2><div class="tablewrap"><table class="plain"><tr><th>machine</th><th>job</th><th>name</th><th>state</th><th>GPU</th><th>elapsed</th><th>time left</th><th>reason / node</th></tr>{jobs}</table></div>
+<h2>Servers</h2><div class="tablewrap"><table class="plain"><tr><th>machine</th><th>GPU</th><th>model</th><th>memory</th><th>utilisation</th></tr>{gpus}</table></div>
+{disks}
 <details><summary>Test and smoke runs ({len(s['tests'])})</summary><table class="plain"><tr><th>run</th><th>state</th><th>last event</th></tr>{tests}</table></details>
 </main></body></html>"""
 
@@ -224,17 +263,28 @@ def render(s, error=None):
 def refresh():
     OUT.parent.mkdir(parents=True, exist_ok=True)
     try:
-        s = fetch()
-        CACHE.write_text(json.dumps(s))
-        OUT.write_text(render(s))
-        return True
-    except Exception as ex:
-        if CACHE.exists():
-            OUT.write_text(render(json.loads(CACHE.read_text()), error=str(ex)))
-        else:
-            OUT.write_text(f"<!doctype html><meta http-equiv='refresh' content='60'><p>Could not reach the server: {e(ex)}</p>")
-        print("refresh failed:", ex, file=sys.stderr)
+        cache = json.loads(CACHE.read_text()) if CACHE.exists() else {}
+    except Exception:
+        cache = {}
+    if "grid" in cache:                                     # old single-server cache format
+        cache = {}
+    st, errors = {}, {}
+    for m in MACHINES:
+        try:
+            st[m] = fetch(m)
+        except Exception as ex:
+            errors[m] = str(ex)
+            if m in cache:
+                st[m] = cache[m]
+            print(f"refresh of {m} failed:", ex, file=sys.stderr)
+    if not st:
+        OUT.write_text(f"<!doctype html><meta http-equiv='refresh' content='60'><p>Could not reach any server: {e(errors)}</p>")
         return False
+    CACHE.write_text(json.dumps(st))
+    merged = merge(st)
+    merged["errors"] = errors
+    OUT.write_text(render(merged))
+    return not errors
 
 
 def main():

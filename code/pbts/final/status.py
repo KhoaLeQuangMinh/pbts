@@ -36,7 +36,16 @@ def _ts(s):
     return datetime.strptime(s, "%Y-%m-%dT%H:%M:%S").timestamp()
 
 
-def squeue_all():
+def squeue_all(local=False):
+    """Our jobs: SLURM's list, or (machines without SLURM) the queue's local job records."""
+    if local:
+        jobs = []
+        for j in Q.local_jobs():
+            rec = json.load(open(Q.JOBS_DIR / f"{j['name']}.json"))
+            el = time.time() - _ts(rec["started"])
+            jobs.append({**j, "elapsed": f"{int(el // 3600)}:{int(el % 3600 // 60):02d}:00", "time_left": "—",
+                         "reason": "local process", "cpus": "", "mem": ""})
+        return jobs
     fmt = "%i|%j|%T|%b|%M|%L|%R|%C|%m"
     out = subprocess.run(["squeue", "--me", "-h", "-o", fmt], capture_output=True, text=True).stdout
     jobs = []
@@ -117,11 +126,12 @@ def describe_run(d: Path, jobs):
     return r
 
 
-def study_grid(plan, jobs, samples):
+def study_grid(plan, jobs, samples, machine="gpu-a240"):
     rows = []
     for m in plan["models"]:
         model = m["model"]
-        base = Q.tag_for(model, "default", samples)
+        ext = m.get("fold0_external") if Q.machine_of(m, 0) != machine else None
+        base = ext["tag"] if ext else Q.tag_for(model, "default", samples)
         d0 = Q.run_dir(model, base, 0)
         r0 = describe_run(d0, jobs)
         tag = base
@@ -131,52 +141,71 @@ def study_grid(plan, jobs, samples):
             tag = rescue
         cells = []
         for k in range(C.N_INNER):
+            if Q.machine_of(m, k) != machine:              # shown by the other machine's status
+                cells.append({"dir": f"{model}/{tag}/fold_{k}", "state": "elsewhere", "machine": Q.machine_of(m, k)})
+                continue
             d = Q.run_dir(model, tag, k)
             r = describe_run(d, jobs) if d.exists() else {"dir": str(d.relative_to(C.RUNS_DIR)), "exists": False}
             if not d.exists():
                 r["state"] = "todo" if k == 0 else "blocked"
                 if k > 0:
-                    f0 = describe_run(Q.run_dir(model, tag, 0), jobs)
-                    r["state"] = "todo" if f0.get("state") == "complete" else "blocked"
-                    r["blocked_by"] = None if r["state"] == "todo" else f"fold 0 ({f0.get('state', 'not started')})"
+                    if Q.machine_of(m, 0) != machine:
+                        ok = bool(ext) and ext.get("verdict") == "complete"
+                        r["state"] = "todo" if ok else "blocked"
+                        r["blocked_by"] = None if ok else f"fold 0 on {Q.machine_of(m, 0)}"
+                    else:
+                        f0 = describe_run(Q.run_dir(model, tag, 0), jobs)
+                        r["state"] = "todo" if f0.get("state") == "complete" else "blocked"
+                        r["blocked_by"] = None if r["state"] == "todo" else f"fold 0 ({f0.get('state', 'not started')})"
             if m.get("hold") and r["state"] in ("todo", "blocked"):
                 r["state"], r["blocked_by"] = "blocked", "on hold: " + m["hold"]
+            r["machine"] = machine
             cells.append(r)
         rows.append({"model": model, "tag": tag, "rescue_tag": rescue, "gres": Q.fitting_gres(m), "peak_GB": m.get("peak_GB"), "hold": m.get("hold"),
                      "fold0_default": r0 if rescue else None, "folds": cells})
     return rows
 
 
+def _run(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True).stdout
+    except FileNotFoundError:                                  # e.g. no sinfo on a machine without SLURM
+        return ""
+
+
 def server_info():
-    gpus = subprocess.run(["nvidia-smi", "--query-gpu=index,name,memory.used,memory.total,utilization.gpu",
-                           "--format=csv,noheader,nounits"], capture_output=True, text=True).stdout
+    gpus = _run(["nvidia-smi", "--query-gpu=index,name,memory.used,memory.total,utilization.gpu",
+                 "--format=csv,noheader,nounits"])
     g = []
     for l in gpus.strip().splitlines():
         i, n, mu, mt, u = [x.strip() for x in l.split(",")]
         g.append({"index": i, "name": n, "mem_used_GB": round(float(mu) / 1024, 1), "mem_total_GB": round(float(mt) / 1024, 1),
                   "util": None if u.startswith("[") else int(u)})
-    df = subprocess.run(["df", "-BG", "/data"], capture_output=True, text=True).stdout.splitlines()[-1].split()
-    runs_size = subprocess.run(["du", "-sh", str(C.RUNS_DIR)], capture_output=True, text=True).stdout.split("\t")[0]
-    queue_alive = bool(subprocess.run(["pgrep", "-u", "khoalq", "-f", "pbts.final.queue"], capture_output=True, text=True).stdout.strip())
-    node = subprocess.run(["sinfo", "-N", "-h", "-o", "%C|%m|%e"], capture_output=True, text=True).stdout.strip().split("|")
+    df = _run(["df", "-BG", str(C.ROOT)]).splitlines()[-1].split()
+    runs_size = _run(["du", "-sh", str(C.RUNS_DIR)]).split("\t")[0] if C.RUNS_DIR.exists() else "0"
+    queue_alive = bool(_run(["pgrep", "-u", "khoalq", "-f", "python -m pbts.final.queue"]).strip())
+    node = _run(["sinfo", "-N", "-h", "-o", "%C|%m|%e"]).strip().split("|")
+    others = len([l for l in _run(["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"]).splitlines() if l.strip()])
     return {"gpus": g, "data_disk": {"size": df[1], "used": df[2], "free": df[3], "use": df[4]}, "runs_size": runs_size,
             "queue_daemon_running": queue_alive,
-            "node_cpus_alloc_idle_other_total": node[0] if node else None,
+            "node_cpus_alloc_idle_other_total": node[0] if node and node[0] else None, "gpu_processes": others,
             "node_free_mem_GB": round(int(node[2]) / 1024, 1) if len(node) > 2 and node[2].isdigit() else None}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--plan", default=str(C.ROOT / "code/plans/main_study.json"))
+    ap.add_argument("--machine", default="gpu-a240")
     a = ap.parse_args()
     plan = json.load(open(a.plan))
     samples = plan.get("samples") or P.TRAINING_SAMPLES
-    jobs = squeue_all()
-    grid = study_grid(plan, jobs, samples or PROVISIONAL_SAMPLES)
+    local = {**Q.DEFAULT_MACHINES, **plan.get("machines", {})}[a.machine]["backend"] == "local"
+    jobs = squeue_all(local)
+    grid = study_grid(plan, jobs, samples or PROVISIONAL_SAMPLES, a.machine)
     planned = {c["dir"] for row in grid for c in row["folds"]} | \
               {row["fold0_default"]["dir"] for row in grid if row.get("fold0_default")}
     extra, tests = [], []
-    for d in sorted(C.RUNS_DIR.glob("*/*/fold_*")):
+    for d in sorted(C.RUNS_DIR.glob("*/*/fold_*")) if C.RUNS_DIR.exists() else []:
         rel = str(d.relative_to(C.RUNS_DIR))
         if rel in planned:
             continue
@@ -185,7 +214,7 @@ def main():
     known = {str(j) for row in grid for c in row["folds"] for j in run_job_ids(C.RUNS_DIR / c["dir"])} | \
             {str(j) for r in extra + tests for j in run_job_ids(C.RUNS_DIR / r["dir"])}
     other_jobs = [j for j in jobs if j["id"] not in known]
-    out = {"generated": time.strftime("%Y-%m-%dT%H:%M:%S"), "training_samples": samples,
+    out = {"machine": a.machine, "generated": time.strftime("%Y-%m-%dT%H:%M:%S"), "training_samples": samples,
            "training_samples_fixed": bool(samples), "provisional_samples": None if samples else PROVISIONAL_SAMPLES,
            "plan": plan, "grid": grid, "pilot_and_extra": extra, "tests": tests, "jobs": jobs, "other_jobs": other_jobs,
            "server": server_info(), "locked_test_done": (C.RUNS_DIR / "final_locked" / "FINAL_DONE.json").exists()}
