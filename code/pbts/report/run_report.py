@@ -196,8 +196,8 @@ def detection_by_size(les):
     fig, ax = plt.subplots(figsize=(10, 3.6))
     w = 0.13
     for i, r in enumerate(REGIONS):
-        d = t[t.region == r]
-        ax.bar(np.arange(len(names)) + i * w, d["mean"], w, label=r)
+        d = t[t.region == r].set_index("size")["mean"].reindex(names)   # a region may have no GT lesions
+        ax.bar(np.arange(len(names)) + i * w, d.fillna(0).to_numpy(), w, label=r)
     ax.set_xticks(np.arange(len(names)) + 2.5 * w); ax.set_xticklabels(names); ax.set_ylim(0, 1)
     ax.set_xlabel("GT lesion size (voxels = mm³)"); ax.set_ylabel("fraction detected"); ax.legend(fontsize=7, ncol=6)
     ax.grid(alpha=.3, axis="y")
