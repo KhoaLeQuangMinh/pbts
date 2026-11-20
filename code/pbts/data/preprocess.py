@@ -93,7 +93,19 @@ def main():
     df.to_csv(C.HEAD_DIR / "records.csv", index=False)
     print(f"{len(df)} cases | locked {int(df.locked.sum())} | skull-stripped {df.skull_stripped.sum()} "
           f"| oversized {df.oversized_vs_frame.sum()} | label voxels outside box: {df.label_vox_outside_box.sum()}")
+    write_dataset_json(int((~df.locked.astype(bool)).sum()))
     (C.HEAD_DIR / "DONE").write_text("preprocessed\n")
+
+
+def write_dataset_json(n_dev):
+    """nnU-Net's dataset.json for the development cases. Content identical to the file written by hand on gpu-a240
+    on 2026-11-19 (added here 2026-11-21 so the step is reproducible on another machine)."""
+    d = {"name": "PBTSHead",
+         "description": f"BraTS-PEDs 2026, {n_dev} development cases (outer fold 0 locked test excluded). Head-cropped and "
+                        "z-scored per channel over head voxels by pbts.data.preprocess; nnU-Net must NOT renormalise.",
+         "channel_names": {str(i): ch for i, ch in enumerate(C.CHANNELS)},
+         "labels": dict(C.LABELS), "numTraining": n_dev, "file_ending": ".nii.gz"}
+    json.dump(d, open(C.NNUNET_RAW / C.DATASET_NAME / "dataset.json", "w"), indent=2)
 
 
 if __name__ == "__main__":
