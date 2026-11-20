@@ -126,6 +126,9 @@ def plan_runs(plan, jobs, state, samples):
     """Ordered list of (model, tag, fold, lr_factor, gres_options) that should run now."""
     todo, report = [], {}
     for m in plan["models"]:
+        if m.get("hold"):                   # e.g. not validated / memory not measured yet
+            report[m["model"]] = "on hold: " + m["hold"]
+            continue
         model, gres = m["model"], fitting_gres(m)
         base = tag_for(model, "default", samples)
         s0 = status(model, base, 0, jobs)

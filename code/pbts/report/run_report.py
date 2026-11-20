@@ -192,7 +192,7 @@ def detection_by_size(les):
     bins = [0, 50, 200, 1000, 5000, 1e9]
     names = ["≤50", "51–200", "201–1k", "1k–5k", ">5k"]
     g["size"] = pd.cut(g.vol, bins, labels=names)
-    t = g.groupby(["region", "size"], observed=False).detected.agg(["mean", "size"]).reset_index()
+    t = g.groupby(["region", "size"], observed=False).detected.agg(mean="mean", n="size").reset_index()
     fig, ax = plt.subplots(figsize=(10, 3.6))
     w = 0.13
     for i, r in enumerate(REGIONS):
@@ -204,7 +204,7 @@ def detection_by_size(les):
     fp = les[les.kind == "pred_fp"]
     fp_t = fp.groupby("region").agg(n=("vol", "size"), median_vol=("vol", "median"),
                                     median_dist_mm=("dist_to_gt_mm", "median")).reset_index() if len(fp) else pd.DataFrame()
-    counts = t.pivot(index="region", columns="size", values="size").reindex(REGIONS)
+    counts = t.pivot(index="region", columns="size", values="n").reindex(REGIONS)
     return (_img(_fig_png(fig)) + "<h4>GT lesions per size bin</h4>" + counts.to_html(classes="t") +
             "<h4>False-positive pieces</h4>" + (fp_t.to_html(index=False, classes="t") if len(fp_t) else "<p>None.</p>"))
 

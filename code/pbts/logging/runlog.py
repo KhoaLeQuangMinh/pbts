@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 from pbts import config as C
@@ -177,12 +178,13 @@ class RunLogger:
             os.environ.setdefault("WANDB_API_KEY", C.WANDB_KEY_FILE.read_text().strip())
             entity = C.WANDB_ENTITY_FILE.read_text().strip()
             id_file = self.dir / "wandb_id.txt"
-            run_id = id_file.read_text().strip() if id_file.exists() else wandb.util.generate_id()
+            # own id (wandb.util.generate_id no longer exists in wandb 0.31; every run before 2026-11-20 fell
+            # back to local-only logging because of it, and is mirrored afterwards by wandb_backfill)
+            run_id = id_file.read_text().strip() if id_file.exists() else uuid.uuid4().hex[:12]
             id_file.write_text(run_id)
             self.wandb = wandb.init(entity=entity, project=C.WANDB_PROJECT, id=run_id, resume="allow",
                                     name=self.cfg.get("run_name"), group=self.cfg.get("model"),
-                                    job_type=self.cfg.get("tag"), config=self.cfg, dir=str(self.dir),
-                                    settings=wandb.Settings(start_method="thread"))
+                                    job_type=self.cfg.get("tag"), config=self.cfg, dir=str(self.dir))
             self.wandb.define_metric("global_step")
             for pat in ["step/*", "epoch/*", "monitor/*", "monitor_img/*", "events/*"]:
                 self.wandb.define_metric(pat, step_metric="global_step")

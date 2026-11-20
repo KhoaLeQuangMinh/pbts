@@ -14,7 +14,7 @@ from pbts import config as C
 from pbts import protocol as P
 from pbts.final import queue as Q
 
-TEST_TAGS = ("smoke", "resume_test", "throughput", "smoke128")
+TEST_TAGS = ("smoke", "resume_test", "throughput", "smoke128", "smoke_wandb")
 PROVISIONAL_SAMPLES = 100000
 
 
@@ -140,7 +140,7 @@ def study_grid(plan, jobs, samples):
                     r["state"] = "todo" if f0.get("state") == "complete" else "blocked"
                     r["blocked_by"] = None if r["state"] == "todo" else f"fold 0 ({f0.get('state', 'not started')})"
             cells.append(r)
-        rows.append({"model": model, "tag": tag, "rescue_tag": rescue, "gres": Q.fitting_gres(m), "peak_GB": m.get("peak_GB"),
+        rows.append({"model": model, "tag": tag, "rescue_tag": rescue, "gres": Q.fitting_gres(m), "peak_GB": m.get("peak_GB"), "hold": m.get("hold"),
                      "fold0_default": r0 if rescue else None, "folds": cells})
     return rows
 

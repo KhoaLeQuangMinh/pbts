@@ -194,9 +194,12 @@ def main():
     cfg_path = run_dir / "run_config.json"
     if cfg_path.exists():
         old = json.load(open(cfg_path))
+        # This run's own recipe + the shared settings must match; protocol_sha (ALL recipes) is recorded but not
+        # enforced, so a dated amendment for ANOTHER model does not block resuming this run (2026-11-20).
         keys = ["model", "tag", "fold", "configuration", "samples", "lr_factor", "batch_size", "train_cases",
-                "val_cases", "protocol_sha"]
-        diff = [k for k in keys if old.get(k) != cfg.get(k)]
+                "val_cases", "recipe", "shared_training"]
+        norm = lambda v: json.loads(json.dumps(v, default=str))   # tuples in memory vs lists in the JSON file
+        diff = [k for k in keys if norm(old.get(k)) != norm(cfg.get(k))]
         if diff:
             sys.exit(f"run_config.json exists with different {diff}: refusing to mix two runs in {run_dir}")
         cfg["monitor_cases"] = old["monitor_cases"]

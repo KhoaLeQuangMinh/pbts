@@ -36,7 +36,7 @@ def paired_compare(a, b, cases, n=2000, seed=0):
     d = pd.DataFrame({"a": np.asarray(a, float), "b": np.asarray(b, float)}, index=list(cases)).dropna()
     if len(d) < 3:
         return {"n": len(d), "mean_diff": np.nan, "ci_lo": np.nan, "ci_hi": np.nan, "p_wilcoxon": np.nan,
-                "a_better": np.nan}
+                "a_better": np.nan, "b_better": np.nan}
     diff = d.a - d.b
     m, lo, hi = bootstrap_ci(diff.values, diff.index, n=n, seed=seed)
     if np.allclose(diff.values, 0):

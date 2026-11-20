@@ -9,7 +9,7 @@ live elsewhere in pbts and are identical for every model.
 # Training length is set once, for every model, by the nnU-Net pilot (Phase B), in training samples
 # (1 epoch = 1 pass over the ~188-scan training fold). Recipes below are rescaled to that length:
 # schedules and warmups keep the same FRACTION of training as in the original code.
-TRAINING_SAMPLES = None   # set after the pilot, in a separate commit
+TRAINING_SAMPLES = 100000   # set 2026-11-20 by the pilot (see the amendment below)
 
 # Shared training pipeline (identical for every model, like the augmentation):
 SHARED_TRAINING = {
@@ -29,6 +29,17 @@ SHARED_TRAINING = {
 #   2026-11-19  Recorded 'grad_clip' per recipe (omitted before, not a change): nnU-Net clips at 12,
 #               Primus's own train_step clips at 1 (primus_trainers.py).
 #   2026-11-19  Verified SegMamba (clip 12, poly 0.9) and Swin UNETR (no clipping) recipes from their code.
+#   2026-11-20  Decision 1 (pilot finished; evidence: tools/pilot_decision.py -> reports/pilot_decision.json).
+#               TRAINING_SAMPLES = 100,000. 'Within noise of 100%' read strictly: for every region (ET NET CC ED
+#               TC WT) and metric (official DSC, official NSD, 2023 lesion-wise Dice), the patient-bootstrap 95% CI
+#               of (checkpoint - 100%) on the 48 fold-0 validation scans contains 0.
+#                 25%: fails on most regions.  50%: WT equal (+0.001) but lesion-wise ET/CC/ED -0.24/-0.34/-0.19
+#                 (false alarms on scans without the region 3-4x higher).  75%: every Dice CI contains 0, but
+#                 official NSD NET -0.016 [-0.032,-0.001] and ED -0.017 [-0.043,-0.002] do not.
+#               -> the shortest length within noise is 100%; the pilot run is ResEnc's fold-0 run as planned.
+#               Input stays whole-head: the 128^3 run (same samples) has sharper boundaries (NSD WT +0.027) but
+#               predicts regions that are absent far more often (false alarms ET/CC/ED 0.56/0.44/0.39 vs
+#               0.19/0.17/0.08), so its lesion-wise ET/CC/ED are -0.10/-0.24/-0.26.
 
 RECIPES = {
     "nnunet_resenc_l": {

@@ -6,6 +6,8 @@ P=/data/khoalq/pbts
 export CUDA_HOME=$P/cuda124 PATH=$P/cuda124/bin:$PATH TORCH_CUDA_ARCH_LIST="8.0" MAX_JOBS=${MAX_JOBS:-8}
 export CAUSAL_CONV1D_FORCE_BUILD=TRUE MAMBA_FORCE_BUILD=TRUE UV_CACHE_DIR=/data/khoalq/.uv_cache
 uv pip install -q --python $P/env/bin/python ninja packaging setuptools wheel
+# the unused LM-head import would need `transformers` (see tools/patch_mamba_init.py)
+$P/env/bin/python $P/code/tools/patch_mamba_init.py $P/repos/SegMamba/mamba/mamba_ssm/__init__.py
 cd $P/repos/SegMamba/causal-conv1d && uv pip install --python $P/env/bin/python --no-build-isolation --no-deps .
 cd $P/repos/SegMamba/mamba && uv pip install --python $P/env/bin/python --no-build-isolation --no-deps .
-$P/env/bin/python -c "import torch, causal_conv1d, mamba_ssm, selective_scan_cuda; print('built OK', torch.__version__)"
+cd /tmp && $P/env/bin/python -c "import torch, causal_conv1d, mamba_ssm, selective_scan_cuda; print('built OK', torch.__version__, mamba_ssm.__file__)"
