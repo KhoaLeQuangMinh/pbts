@@ -253,6 +253,11 @@ class PBTSTrainerMixin:
                **{f"val_pseudo_dice_{n}": float(d) for n, d in zip(["ET", "NET", "CC", "ED"], dice_val)},
                "grad_norm_mean": float(np.mean([o["grad_norm"] for o in outs])),
                "grad_norm_max": float(np.max([o["grad_norm"] for o in outs])),
+               # AMP: a step whose fp16 gradients overflow has an infinite norm; GradScaler skips it (weights untouched)
+               # and halves the loss scale. Logged explicitly so inf in grad_norm_* is never mistaken for divergence.
+               "amp_skipped_steps": int(sum(not math.isfinite(o["grad_norm"]) for o in outs)),
+               "grad_norm_mean_finite": float(np.mean([o["grad_norm"] for o in outs if math.isfinite(o["grad_norm"])]
+                                                      or [np.nan])),
                "clipped_fraction": float(np.mean([o["grad_norm"] > self.grad_clip for o in outs])),
                "data_wait_s": float(np.sum([o["data_s"] for o in outs])),
                "compute_s": float(np.sum([o["step_s"] for o in outs])),

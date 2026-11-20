@@ -8,7 +8,10 @@ from multiprocessing import Pool
 
 import numpy as np
 
-sys.path.insert(0, "/data/khoalq/pbts/repos/BraTS-2023-Metrics")
+from pathlib import Path  # noqa: E402
+
+# project root = folder holding code/ (this file is ROOT/code/tests/ref2023_runner.py); runs with -I, no pbts import
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "repos/BraTS-2023-Metrics"))
 import metrics as M  # noqa: E402  (original code, unmodified)
 
 

@@ -10,6 +10,7 @@ All files are append-only JSON lines, so a resumed run continues the same logs:
   events.jsonl           start / resume / checkpoint / requeue / NaN / crash / rescue checks
 """
 import json
+import math
 import os
 import platform
 import socket
@@ -196,6 +197,11 @@ class RunLogger:
 
     def _wb(self, d, step):
         if self.wandb is None or not d:
+            return
+        # W&B only gets defined numbers (local JSONL keeps the raw value): inf = AMP-skipped step (see
+        # amp_skipped_steps), NaN = undefined, e.g. a false-alarm rate for a region present in every monitor scan.
+        d = {k: v for k, v in d.items() if not (isinstance(v, float) and not math.isfinite(v))}
+        if not d:
             return
         if step is not None:
             d = {**d, "global_step": step}

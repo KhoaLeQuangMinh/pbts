@@ -3,7 +3,9 @@ import os
 from pathlib import Path
 
 # ---------------------------------------------------------------- paths (server)
-ROOT = Path(os.environ.get("PBTS_ROOT", "/data/khoalq/pbts"))
+# The project root is the folder that holds code/ (this file is ROOT/code/pbts/config.py):
+# gpu-a240 /data/khoalq/pbts, blackwell /home/khoalq/pbts. PBTS_ROOT overrides.
+ROOT = Path(os.environ.get("PBTS_ROOT", Path(__file__).resolve().parents[2]))
 KAGGLE_DIR = ROOT / "data/kagglehub_cache/datasets/ckhangnguyn/pbts-preprocessed/versions/1"
 MANIFEST = KAGGLE_DIR / "cases_manifest.csv"
 METADATA = KAGGLE_DIR / "BraTS-PEDs_metadata.tsv"
