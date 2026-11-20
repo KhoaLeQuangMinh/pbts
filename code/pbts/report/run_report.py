@@ -6,6 +6,7 @@ Built only from what the run saved (logs, checkpoint evaluations, predictions), 
 Contains MRI pictures: keep it on the server / your own machine, never publish it.
 """
 import base64
+import html as _html
 import io
 import json
 import sys
@@ -178,10 +179,13 @@ def score_table(df):
         }
         rows.append(cells)
     t = pd.DataFrame(rows)
+    guide = ("<p class='note'><b>How to read:</b> for regions that many scans lack (CC, ED, often ET), look at "
+             "'Dice when present', 'missed when present' and 'false alarm when absent'. The 2023 lesion-wise score gives 1 "
+             "to every correctly empty scan, so it looks high whenever most scans lack the region.</p>")
     note = ("<p class='note'>Means with 95% CIs from resampling patients. Official scorer: a region absent in both GT "
             "and prediction is NaN and drops out of its mean ('official cases counted'); any prediction on an absent "
             "region scores 0. 2023 lesion-wise: absent in both scores 1, lesions ≤50 voxels are not counted.</p>")
-    return t.to_html(index=False, escape=False, classes="t") + note
+    return guide + t.to_html(index=False, escape=False, classes="t") + note
 
 
 def detection_by_size(les):
@@ -193,20 +197,53 @@ def detection_by_size(les):
     names = ["≤50", "51–200", "201–1k", "1k–5k", ">5k"]
     g["size"] = pd.cut(g.vol, bins, labels=names)
     t = g.groupby(["region", "size"], observed=False).detected.agg(mean="mean", n="size").reset_index()
-    fig, ax = plt.subplots(figsize=(10, 3.6))
+    fig, ax = plt.subplots(figsize=(10, 3.8))
     w = 0.13
     for i, r in enumerate(REGIONS):
-        d = t[t.region == r].set_index("size")["mean"].reindex(names)   # a region may have no GT lesions
-        ax.bar(np.arange(len(names)) + i * w, d.fillna(0).to_numpy(), w, label=r)
-    ax.set_xticks(np.arange(len(names)) + 2.5 * w); ax.set_xticklabels(names); ax.set_ylim(0, 1)
+        d = t[t.region == r].set_index("size").reindex(names)          # a region may have no GT lesions
+        x = np.arange(len(names)) + i * w
+        ax.bar(x, d["mean"].fillna(0).to_numpy(), w, label=r)
+        for xi, m, n in zip(x, d["mean"], d["n"]):
+            if pd.notna(n) and n > 0:                                   # found / GT lesions; empty bins get no label
+                ax.text(xi, (0 if pd.isna(m) else m) + .02, f"{int(round((0 if pd.isna(m) else m) * n))}/{int(n)}",
+                        ha="center", va="bottom", fontsize=6, rotation=90)
+    ax.set_xticks(np.arange(len(names)) + 2.5 * w); ax.set_xticklabels(names); ax.set_ylim(0, 1.25)
     ax.set_xlabel("GT lesion size (voxels = mm³)"); ax.set_ylabel("fraction detected"); ax.legend(fontsize=7, ncol=6)
     ax.grid(alpha=.3, axis="y")
-    fp = les[les.kind == "pred_fp"]
-    fp_t = fp.groupby("region").agg(n=("vol", "size"), median_vol=("vol", "median"),
-                                    median_dist_mm=("dist_to_gt_mm", "median")).reset_index() if len(fp) else pd.DataFrame()
+    note = ("<p class='note'>Label on each bar = lesions found / true lesions in that size bin (no label = no true lesion "
+            "of that size). Most of the ≤50-voxel 'lesions' are tiny fragments of the annotation: the 2023 metric ignores "
+            "them, the official 2026 instance metrics (detection F1) count them.</p>")
     counts = t.pivot(index="region", columns="size", values="n").reindex(REGIONS)
-    return (_img(_fig_png(fig)) + "<h4>GT lesions per size bin</h4>" + counts.to_html(classes="t") +
-            "<h4>False-positive pieces</h4>" + (fp_t.to_html(index=False, classes="t") if len(fp_t) else "<p>None.</p>"))
+    return (_img(_fig_png(fig)) + note + "<h4>True lesions per size bin</h4>" + counts.to_html(classes="t") +
+            "<h4>False-positive pieces (predicted pieces that overlap no true lesion of that region)</h4>" + fp_pieces(les))
+
+
+def fp_pieces(les):
+    """Where the false-positive pieces are: inside the true tumour (a label mix-up, e.g. NET called CC) or outside it
+    (a spurious detection), and how far from the tumour. Uses each piece's centre and the case's true tumour."""
+    import nibabel as nib
+    from scipy import ndimage
+    fp = les[les.kind == "pred_fp"].copy()
+    if fp.empty:
+        return "<p>None.</p>"
+    inside, dist = [], []
+    cache = {}
+    for _, r in fp.iterrows():
+        if r.case not in cache:
+            tum = np.asanyarray(nib.load(str(C.RAW_DIR / "labelsTr" / f"{r.case}.nii.gz")).dataobj) > 0
+            cache = {r.case: (tum, ndimage.distance_transform_edt(~tum, sampling=C.SPACING) if tum.any() else None)}
+        tum, edt = cache[r.case]
+        ijk = tuple(int(np.clip(round(v), 0, s - 1)) for v, s in zip((r.cx, r.cy, r.cz), tum.shape))
+        inside.append(bool(tum[ijk]))
+        dist.append(float(edt[ijk]) if edt is not None else np.nan)
+    fp["inside"], fp["dist"] = inside, dist
+    t = fp.groupby("region").agg(pieces=("vol", "size"), median_volume_mm3=("vol", "median"),
+                                 inside_true_tumour=("inside", "sum"),
+                                 median_mm_from_tumour_if_outside=("dist", lambda d: d[d > 0].median()))
+    t["inside_true_tumour"] = [f"{int(i)} / {int(n)}" for i, n in zip(t.inside_true_tumour, t.pieces)]
+    return t.reindex([r for r in REGIONS if r in t.index]).to_html(classes="t", float_format=lambda v: f"{v:.1f}", na_rep="—") + \
+        "<p class='note'>Inside the true tumour = the piece's centre lies in tumour tissue of another label (a labelling " \
+        "mix-up). Outside = a spurious detection; distance from the piece's centre to the nearest tumour voxel.</p>"
 
 
 def confusion_section(conf):
@@ -227,14 +264,19 @@ def confusion_section(conf):
     return _img(_fig_png(fig))
 
 
-def calibration_section(run, cases, n_vox=200_000, seed=0):
+def calibration_section(run, cases, n_vox=300_000, seed=0, margin_mm=5.0):
+    """Reliability of the predicted probabilities in a region that does NOT depend on the prediction: the true tumour
+    plus a margin (the whole head would be swamped by easy background). Second curve: inside the true tumour only,
+    i.e. how trustworthy the subregion labels are."""
     import matplotlib.pyplot as plt
+    import nibabel as nib
+    from scipy import ndimage
     pdir = run / "eval" / "ckpt100" / "probabilities"
     if not pdir.exists():
         return "<p>No probabilities saved.</p>"
-    import nibabel as nib
     rng = np.random.default_rng(seed)
-    conf_all, corr_all = [], []
+    per = n_vox // max(1, len(cases))
+    sets = {"near": ([], []), "tumour": ([], [])}
     for c in cases:
         f = pdir / f"{c}.npz"
         if not f.exists():
@@ -244,59 +286,211 @@ def calibration_section(run, cases, n_vox=200_000, seed=0):
         lo, hi = z["box_lo"], z["box_hi"]
         gt = np.asanyarray(nib.load(str(C.RAW_DIR / "labelsTr" / f"{c}.nii.gz")).dataobj)
         gt = gt[tuple(slice(a, b + 1) for a, b in zip(lo, hi))]
-        pred = probs.argmax(0)
-        conf = probs.max(0)
-        m = (gt > 0) | (pred > 0)                       # tumor union: background voxels would swamp the curve
-        idx = np.flatnonzero(m)
-        if idx.size > n_vox // max(1, len(cases)):
-            idx = rng.choice(idx, n_vox // max(1, len(cases)), replace=False)
-        conf_all.append(conf.ravel()[idx]); corr_all.append((pred.ravel()[idx] == gt.ravel()[idx]))
-    if not conf_all:
+        pred, conf = probs.argmax(0), probs.max(0)
+        tum = gt > 0
+        near = ndimage.distance_transform_edt(~tum, sampling=C.SPACING) <= margin_mm if tum.any() else tum
+        for key, m in (("near", near), ("tumour", tum)):
+            idx = np.flatnonzero(m)
+            if idx.size > per:
+                idx = rng.choice(idx, per, replace=False)
+            sets[key][0].append(conf.ravel()[idx]); sets[key][1].append(pred.ravel()[idx] == gt.ravel()[idx])
+    if not sets["near"][0]:
         return "<p>No probabilities found.</p>"
-    conf, corr = np.concatenate(conf_all), np.concatenate(corr_all)
-    bins = np.linspace(0.2, 1, 17)
-    which = np.clip(np.digitize(conf, bins) - 1, 0, len(bins) - 2)
-    acc = np.array([corr[which == b].mean() if (which == b).any() else np.nan for b in range(len(bins) - 1)])
-    frac = np.array([(which == b).mean() for b in range(len(bins) - 1)])
-    ece = np.nansum(frac * np.abs(acc - (bins[:-1] + bins[1:]) / 2))
-    fig, ax = plt.subplots(figsize=(4.6, 4))
-    ax.plot([0, 1], [0, 1], "k:"); ax.plot((bins[:-1] + bins[1:]) / 2, acc, marker="o")
-    ax.set_xlabel("confidence of the predicted label"); ax.set_ylabel("fraction correct")
-    ax.set_title(f"calibration inside the tumor union · ECE {ece:.3f}", fontsize=9); ax.grid(alpha=.3)
-    return _img(_fig_png(fig))
+    bins = np.array([0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0001])
+    mids = (bins[:-1] + np.minimum(bins[1:], 1)) / 2
+    fig, ax = plt.subplots(1, 2, figsize=(10, 4))
+    rows = []
+    for key, name, colr in (("near", f"true tumour + {margin_mm:.0f} mm", "C0"), ("tumour", "inside true tumour", "C1")):
+        conf, corr = np.concatenate(sets[key][0]), np.concatenate(sets[key][1])
+        which = np.clip(np.digitize(conf, bins) - 1, 0, len(bins) - 2)
+        acc = np.array([corr[which == b].mean() if (which == b).any() else np.nan for b in range(len(bins) - 1)])
+        frac = np.array([(which == b).mean() for b in range(len(bins) - 1)])
+        ece = float(np.nansum(frac * np.abs(acc - mids)))
+        ax[0].plot(mids, acc, marker="o", color=colr, label=f"{name} · ECE {ece:.3f}")
+        ax[1].bar(np.arange(len(mids)) + (0 if key == "near" else .4), frac, .4, color=colr, label=name)
+        rows.append({"region": name, "voxels sampled": len(conf), "accuracy": corr.mean(), "mean confidence": conf.mean(),
+                     "ECE": ece, "share at ≥0.99 confidence": (conf >= .99).mean(),
+                     "accuracy at ≥0.99": corr[conf >= .99].mean() if (conf >= .99).any() else np.nan})
+    ax[0].plot([0, 1], [0, 1], "k:"); ax[0].set_xlabel("confidence of the predicted label"); ax[0].set_ylabel("fraction correct")
+    ax[0].set_title("reliability (dotted = perfectly calibrated)", fontsize=9); ax[0].legend(fontsize=7); ax[0].grid(alpha=.3)
+    ax[1].set_xticks(np.arange(len(mids)) + .2)
+    ax[1].set_xticklabels([f"{a:.2f}–{min(b, 1):.2f}" for a, b in zip(bins[:-1], bins[1:])], rotation=45, fontsize=7)
+    ax[1].set_ylabel("share of voxels"); ax[1].set_title("how many voxels fall in each confidence bin", fontsize=9)
+    ax[1].legend(fontsize=7); ax[1].grid(alpha=.3, axis="y")
+    fig.tight_layout()
+    return _img(_fig_png(fig)) + pd.DataFrame(rows).to_html(index=False, classes="t", float_format=lambda v: f"{v:.3f}", na_rep="—") + \
+        "<p class='note'>Points below the dotted line = overconfident. Both regions are fixed by the ground truth, not " \
+        "by the prediction, so they are comparable between models.</p>"
+
+
+LEGEND = "<p class='note'>ET blue · NET orange · CC green · ED yellow. Top row ground truth, bottom row prediction; " \
+         "slices through the centre of the region of interest.</p>"
+
+
+def _case_figure(run, case, title, focus="union", region=None):
+    """Ground truth vs prediction on axial/coronal/sagittal slices through the centre of `focus`:
+    'union' (tumour in either), 'gt' or 'pred' (the given region in the ground truth / the prediction)."""
+    import matplotlib.pyplot as plt
+    import nibabel as nib
+    p = run / "eval" / "ckpt100" / "predictions" / f"{case}.nii.gz"
+    if not p.exists():
+        return ""
+    pred = np.asanyarray(nib.load(str(p)).dataobj)
+    gt = np.asanyarray(nib.load(str(C.RAW_DIR / "labelsTr" / f"{case}.nii.gz")).dataobj)
+    fl = nib.load(str(C.RAW_DIR / "imagesTr" / f"{case}_0000.nii.gz")).get_fdata(dtype=np.float32)
+    labs = C.REGIONS[region] if region else None
+    t = {"union": (gt > 0) | (pred > 0), "gt": np.isin(gt, labs) if labs else gt > 0,
+         "pred": np.isin(pred, labs) if labs else pred > 0}[focus]
+    ctr = np.round(np.argwhere(t).mean(0)).astype(int) if t.any() else np.array(gt.shape) // 2
+    lo, hi = np.percentile(fl[fl > 0], [1, 99.5]) if (fl > 0).any() else (0, 1)
+    fig, ax = plt.subplots(2, 3, figsize=(8, 5.4))
+    for row, lab in enumerate([gt, pred]):
+        for col, sl in enumerate([(slice(None), slice(None), ctr[2]), (slice(None), ctr[1], slice(None)),
+                                  (ctr[0], slice(None), slice(None))]):
+            img = np.clip((fl[sl] - lo) / (hi - lo + 1e-6), 0, 1)
+            rgb = np.stack([img] * 3, -1)
+            for k, col_rgb in LABEL_COLORS.items():
+                mm = lab[sl] == k
+                rgb[mm] = .45 * rgb[mm] + .55 * np.array(col_rgb)
+            ax[row, col].imshow(np.rot90(rgb)); ax[row, col].set_axis_off()
+    ax[0, 0].set_title("ground truth", fontsize=8, loc="left"); ax[1, 0].set_title("prediction", fontsize=8, loc="left")
+    fig.suptitle(title, fontsize=9)
+    fig.tight_layout()
+    return f"<figure>{_img(_fig_png(fig))}</figure>"
 
 
 def worst_cases(run, df, n=6):
-    import matplotlib.pyplot as plt
-    import nibabel as nib
     wt = df[df.region == "WT"].sort_values("off_global_dsc").head(n)
+    figs = [_case_figure(run, r.case, f"{r.case} · WT Dice {r.off_global_dsc:.3f}") for _, r in wt.iterrows()]
+    return '<div class="gallery">' + "".join(figs) + "</div>" + LEGEND
+
+
+def region_failures(run, df, region, n=6):
+    """Scans where the model MISSED the region entirely (it is in the ground truth, nothing predicted) and scans where it
+    predicted the region although it is absent (false alarm). Misses first: they are the bigger problem for CC/ED."""
+    d = df[df.region == region]
+    miss = d[d.presence == "FN"].sort_values("gt_vol", ascending=False)
+    fa = d[d.presence == "FP"].sort_values("pred_vol", ascending=False)
+    if miss.empty and fa.empty:
+        return f"<p>No {region} misses and no {region} false alarms.</p>"
+    figs = [_case_figure(run, r.case, f"{r.case} · {region} MISSED: true {r.gt_vol / 1000:.2f} ml, predicted 0",
+                         focus="gt", region=region) for _, r in miss.head(n).iterrows()]
+    figs += [_case_figure(run, r.case, f"{r.case} · {region} FALSE ALARM: none in truth, predicted {r.pred_vol / 1000:.2f} ml",
+                          focus="pred", region=region) for _, r in fa.head(max(2, n - len(figs))).iterrows()]
+    return (f"<p class='note'>{len(miss)} scan(s) with {region} missed, {len(fa)} with a {region} false alarm "
+            f"(largest shown first).</p><div class='gallery'>{''.join(figs)}</div>" + LEGEND)
+
+
+def volume_agreement(df):
+    """Does the model systematically over- or under-estimate each region's volume (the number clinicians use)?"""
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1, 6, figsize=(17, 3.2))
+    rows = []
+    for a, r in zip(ax, REGIONS):
+        d = df[(df.region == r) & df.gt_present]
+        if d.empty:
+            a.set_axis_off(); continue
+        gt_ml, pr_ml = d.gt_vol / 1000, d.pred_vol / 1000
+        floor = max(gt_ml.min() / 3, 1e-3)
+        a.scatter(gt_ml, pr_ml.clip(lower=floor), s=12, c=np.where(pr_ml > 0, "C0", "C3"))
+        lim = [floor, max(gt_ml.max(), pr_ml.max()) * 1.5]
+        a.plot(lim, lim, "k:"); a.set_xscale("log"); a.set_yscale("log"); a.set_xlim(lim); a.set_ylim(lim)
+        a.set_title(r, fontsize=9); a.set_xlabel("true volume (ml)", fontsize=8); a.grid(alpha=.3)
+        rel = (pr_ml - gt_ml) / gt_ml
+        rows.append({"region": r, "scans with region": len(d), "median true ml": gt_ml.median(),
+                     "median error %": 100 * rel.median(), "median |error| %": 100 * rel.abs().median(),
+                     "under by >20%": f"{int((rel < -.2).sum())} / {len(d)}", "over by >20%": f"{int((rel > .2).sum())} / {len(d)}",
+                     "missed entirely": int((pr_ml == 0).sum())})
+    ax[0].set_ylabel("predicted volume (ml)", fontsize=8)
+    fig.tight_layout()
+    return _img(_fig_png(fig)) + pd.DataFrame(rows).to_html(index=False, classes="t", float_format=lambda v: f"{v:.1f}", na_rep="—") + \
+        "<p class='note'>Scans that contain the region. Red points = region missed entirely (drawn at the bottom). " \
+        "Error = (predicted − true) / true; negative = under-segmentation.</p>"
+
+
+LEVEL_ORDER = ["<5", "5–10", "10–15", "≥15", "small", "medium", "large", "low (posterior fossa)", "middle", "high",
+               "baseline/naive", "follow-up", "left", "midline", "right"]
+
+
+def _level_order(x):
+    """Natural order within a subgroup (age, size, height ...); unknown / not recorded last."""
+    x = str(x)
+    return (x in ("unknown", "not recorded"), LEVEL_ORDER.index(x) if x in LEVEL_ORDER else len(LEVEL_ORDER), x)
+
+
+def subgroup_table(df):
+    """This run's scores broken down by case features (collection ≈ tumour type, follow-up, size, location, ...).
+    One fold has ~48 scans, so groups are small: read it as a first look; the cross-model report pools all 5 folds."""
+    from pbts.analysis.strata import STRATA, case_features
+    feats = case_features()
+    pv = df.pivot(index="case", columns="region")
     out = []
-    for _, r in wt.iterrows():
-        c = r.case
-        p = run / "eval" / "ckpt100" / "predictions" / f"{c}.nii.gz"
-        if not p.exists():
+    for s in STRATA:
+        if s not in feats:
             continue
-        pred = np.asanyarray(nib.load(str(p)).dataobj)
-        gt = np.asanyarray(nib.load(str(C.RAW_DIR / "labelsTr" / f"{c}.nii.gz")).dataobj)
-        fl = nib.load(str(C.RAW_DIR / "imagesTr" / f"{c}_0000.nii.gz")).get_fdata(dtype=np.float32)
-        t = (gt > 0) | (pred > 0)
-        ctr = np.round(np.argwhere(t).mean(0)).astype(int) if t.any() else np.array(gt.shape) // 2
-        lo, hi = np.percentile(fl[fl > 0], [1, 99.5]) if (fl > 0).any() else (0, 1)
-        fig, ax = plt.subplots(2, 3, figsize=(8, 5.4))
-        for row, lab in enumerate([gt, pred]):
-            for col, sl in enumerate([(slice(None), slice(None), ctr[2]), (slice(None), ctr[1], slice(None)),
-                                      (ctr[0], slice(None), slice(None))]):
-                img = np.clip((fl[sl] - lo) / (hi - lo + 1e-6), 0, 1)
-                rgb = np.stack([img] * 3, -1)
-                for k, col_rgb in LABEL_COLORS.items():
-                    mm = lab[sl] == k
-                    rgb[mm] = .45 * rgb[mm] + .55 * np.array(col_rgb)
-                ax[row, col].imshow(np.rot90(rgb)); ax[row, col].set_axis_off()
-        ax[0, 0].set_title("ground truth", fontsize=8, loc="left"); ax[1, 0].set_title("prediction", fontsize=8, loc="left")
-        fig.suptitle(f"{c} · WT Dice {r.off_global_dsc:.3f}", fontsize=9)
-        fig.tight_layout()
-        out.append(f"<figure>{_img(_fig_png(fig))}</figure>")
-    return '<div class="gallery">' + "".join(out) + "</div><p class='note'>ET blue · NET orange · CC green · ED yellow</p>"
+        lv = feats[s].reindex(pv.index).fillna("unknown")
+        groups = pv.groupby(lv).groups
+        for level in sorted(groups, key=_level_order):
+            cases = groups[level]
+            p = pv.loc[cases]
+            row = {"subgroup": s.replace("_", " "), "group": level, "scans": len(cases)}
+            for r in ("WT", "TC"):
+                row[f"{r} Dice"] = p[("off_global_dsc", r)].mean()
+            pres = p[("gt_present", "ET")].astype(bool)
+            row["ET Dice when present"] = f"{p.loc[pres, ('off_global_dsc', 'ET')].mean():.3f} (n={int(pres.sum())})" if pres.any() else "—"
+            for r in ("CC", "ED"):
+                pr, pp = p[("gt_present", r)].astype(bool), p[("pred_present", r)].astype(bool)
+                row[f"{r} missed"] = f"{int((pr & ~pp).sum())} / {int(pr.sum())}"
+                row[f"{r} false alarms"] = f"{int((~pr & pp).sum())} / {int((~pr).sum())}"
+            out.append(row)
+    t = pd.DataFrame(out)
+    return t.to_html(index=False, classes="t", float_format=lambda v: f"{v:.3f}", na_rep="—") + \
+        "<p class='note'>Collection ≈ tumour type (DIPG registry = diffuse brainstem tumours; HGG = high-grade gliomas; " \
+        "CBTN = mixed types). Age and sex exist only for CBTN scans. Groups within one fold are small; the comparison " \
+        "report pools all 5 folds.</p>"
+
+
+def per_case_table(df):
+    """Every validation scan in one table, collapsed by default: trace any number back to its scans."""
+    from pbts.analysis.strata import case_features
+    try:
+        feats = case_features()
+    except Exception:
+        feats = pd.DataFrame()
+    rows = []
+    for c, d in df.groupby("case"):
+        d = d.set_index("region")
+        row = {"case": c}
+        if not feats.empty and c in feats.index:
+            row["collection"] = feats.loc[c, "collection"]; row["follow-up"] = feats.loc[c, "follow_up"]
+        for r in REGIONS:
+            x = d.loc[r]
+            if bool(x.gt_present):
+                row[r] = f"{x.off_global_dsc:.3f}" if pd.notna(x.off_global_dsc) else "—"
+            else:
+                row[r] = "false alarm" if bool(x.pred_present) else "absent ✓"
+        rows.append(row)
+    t = pd.DataFrame(rows).sort_values("WT")
+    return (f"<details><summary>Show all {len(t)} validation scans (sorted by WT Dice)</summary>"
+            + t.to_html(index=False, classes="t") +
+            "<p class='note'>Official whole-volume Dice where the region is in the ground truth; otherwise whether the "
+            "model correctly left it empty. Raw files: eval/ckpt100/per_case_region.csv, per_lesion.csv.</p></details>")
+
+
+ROUTINE_EVENTS = {"checkpoint_latest", "checkpoint_fraction", "checkpoint_scored"}
+
+
+def events_table(events):
+    """Important events with their details; routine checkpoint events summarised as counts."""
+    if not events:
+        return ""
+    counts = pd.Series([e.get("event") for e in events]).value_counts()
+    routine = ", ".join(f"{e} ×{counts[e]}" for e in sorted(ROUTINE_EVENTS) if e in counts)
+    rows = [{"time": e.get("time"), "event": e.get("event"),
+             "details": ", ".join(f"{k}={v}" for k, v in e.items() if k not in ("time", "event"))[:220]}
+            for e in events if e.get("event") not in ROUTINE_EVENTS]
+    return pd.DataFrame(rows).to_html(index=False, classes="t") + \
+        (f"<p class='note'>Routine events not listed: {routine}.</p>" if routine else "")
 
 
 def hardest_training_cases(run, k=10):
@@ -328,10 +522,23 @@ table.t th,table.t td{border-bottom:1px solid var(--line);padding:4px 8px;text-a
 .kv div span{color:var(--muted)}.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;
  background:var(--accent);color:var(--bg)}.gallery{display:flex;flex-wrap:wrap;gap:8px}.gallery figure{margin:0;flex:1 1 360px}
 figcaption{font-size:12px;color:var(--muted)}
+.err{color:#b4442a;font-size:13px}details summary{cursor:pointer;color:var(--accent);margin:6px 0}
 """
 
 
+def _safe(fn, *args, **kw):
+    """One failing section must not cost the whole report (runs call build() when they finish)."""
+    try:
+        return fn(*args, **kw)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return f"<p class='err'>This section could not be built: {_html.escape(repr(e)[:300])}</p>"
+
+
 def build(run_dir):
+    import matplotlib
+    matplotlib.use("Agg")
     run = Path(run_dir)
     cfg = json.load(open(run / "run_config.json"))
     summ = json.load(open(run / "provenance" / "model_summary.json"))
@@ -350,31 +557,38 @@ def build(run_dir):
           "deep supervision": summ["deep_supervision"], "GPU": host.get("gpu"), "code commit": ver.get("commit", "?")[:10],
           "uncommitted files": ver.get("uncommitted_files", "?"), "protocol sha": cfg["protocol_sha"],
           "train / val cases": f"{len(cfg['train_cases'])} / {len(cfg['val_cases'])}",
-          "started": events[0]["time"] if events else "?", "finished": events[-1]["time"] if events else "?"}
+          "started": events[0]["time"] if events else "?",
+          "finished": status.get("time") or next((e["time"] for e in reversed(events) if e["event"] == "run_finished"), "—")}
     head = "".join(f"<div><span>{k}</span><br>{v}</div>" for k, v in kv.items())
     badge = "complete" if status.get("complete") else "INCOMPLETE: " + ", ".join(status.get("missing", []))[:200]
     resc = f"<p><b>Rescue triggered:</b> {rescue['trigger']} — {rescue['detail']}</p>" if rescue else ""
 
     parts = [f"<h1>{cfg['run_name']}</h1><p class='meta'><span class='badge'>{badge}</span></p>{resc}<div class='kv'>{head}</div>",
-             "<h2>Training</h2>", training_curves(run),
-             "<h2>Monitor cases (every few epochs, no flips)</h2>", monitor_curves(run),
-             "<h2>Training length</h2>", length_curve(run)]
+             "<h2>Training</h2>", _safe(training_curves, run),
+             "<h2>Monitor cases (every few epochs, no flips)</h2>", _safe(monitor_curves, run),
+             "<h2>Training length</h2>", _safe(length_curve, run)]
     if df is not None:
-        parts += ["<h2>Final scores (100% checkpoint, 8-flip prediction, raw — no post-processing)</h2>", score_table(df),
-                  "<h2>Detection by lesion size</h2>", detection_by_size(les),
-                  "<h2>Label confusion</h2>", confusion_section(conf),
-                  "<h2>Calibration</h2>", calibration_section(run, sorted(df.case.unique())),
-                  "<h2>Lowest whole-tumor Dice</h2>", worst_cases(run, df)]
-    parts += ["<h2>Hardest training cases</h2>", hardest_training_cases(run),
-              "<h2>Events</h2>", pd.DataFrame(events)[["time", "event"]].to_html(index=False, classes="t") if events else ""]
-    html = (f"<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' "
+        cases = sorted(df.case.unique())
+        parts += ["<h2>Final scores (100% checkpoint, 8-flip prediction, raw — no post-processing)</h2>", _safe(score_table, df),
+                  "<h2>Subgroups (this fold only)</h2>", _safe(subgroup_table, df),
+                  "<h2>Volume agreement</h2>", _safe(volume_agreement, df),
+                  "<h2>Detection by lesion size</h2>", _safe(detection_by_size, les),
+                  "<h2>Label confusion</h2>", _safe(confusion_section, conf),
+                  "<h2>Calibration</h2>", _safe(calibration_section, run, cases),
+                  "<h2>Lowest whole-tumour Dice</h2>", _safe(worst_cases, run, df)]
+        for r in ("CC", "ED", "ET"):
+            parts += [f"<h2>{r}: missed and false alarms</h2>", _safe(region_failures, run, df, r)]
+        parts += ["<h2>All validation scans</h2>", _safe(per_case_table, df)]
+    parts += ["<h2>Hardest training cases</h2>", _safe(hardest_training_cases, run),
+              "<h2>Events</h2>", _safe(events_table, events)]
+    page = (f"<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' "
             f"content='width=device-width,initial-scale=1'><title>{cfg['run_name']}</title><style>{CSS}</style></head>"
             f"<body><main>{''.join(parts)}</main></body></html>")
     out = run / "report.html"
-    out.write_text(html)
+    out.write_text(page)
     copy = C.REPORTS_DIR / "runs" / f"{cfg['model']}__{cfg['tag']}__fold{cfg['fold']}.html"
     copy.parent.mkdir(parents=True, exist_ok=True)
-    copy.write_text(html)
+    copy.write_text(page)
     return out
 
 
