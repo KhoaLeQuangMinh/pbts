@@ -40,6 +40,9 @@ SHARED_TRAINING = {
 #               Input stays whole-head: the 128^3 run (same samples) has sharper boundaries (NSD WT +0.027) but
 #               predicts regions that are absent far more often (false alarms ET/CC/ED 0.56/0.44/0.39 vs
 #               0.19/0.17/0.08), so its lesion-wise ET/CC/ED are -0.10/-0.24/-0.26.
+#   2026-11-20  SegMamba batch_size = 1 (was 'set by memory test'). Job 2745 on the full 40 GB A100: batch 2
+#               (its original) runs out of memory at the whole-head frame; batch 1 peaks at 23.2 GiB in training
+#               (smoke run COMPLETE). Same number of training samples as every model, so it takes twice the steps.
 
 RECIPES = {
     "nnunet_resenc_l": {
@@ -58,8 +61,9 @@ RECIPES = {
         "source": "ge-xing/SegMamba 3_train.py @ cff3597",
         "optimizer": "SGD", "lr": 1e-2, "momentum": 0.99, "nesterov": True, "weight_decay": 3e-5,
         "schedule": "poly(exponent=0.9)", "warmup_fraction": 0.0, "grad_clip": 12.0,  # verified: light_training/trainer.py
-        "deep_supervision": False, "batch_size": None,  # set by memory test
+        "deep_supervision": False, "batch_size": 1,  # memory test 2026-11-20 (amendment below)
         "deviation": "out_chans 4 -> 5 (our label set); whole-head frame instead of 128^3; "
+                     "batch size 1 instead of 2 (batch 2 does not fit a 40 GB A100 at the whole-head frame); "
                      "shared Dice+CE instead of its original CE-only loss; nslices per stage set to the actual "
                      "depth of each feature map (80/40/20/10 for our 160-slice frame) instead of the hard-coded "
                      "64/32/16/8 for 128^3; poly lr updated per epoch instead of per step",

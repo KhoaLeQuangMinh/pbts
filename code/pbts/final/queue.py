@@ -151,6 +151,10 @@ def plan_runs(plan, jobs, state, samples):
             if s in ("todo", "stopped"):
                 todo.append((model, tag, k, lr, gres))
         report[model] = f"recipe '{tag}': " + ", ".join(f"f{k}={s}" for k, s in {0: s0, **sts}.items())
+    # Fold 0 of every model before any later fold (2026-11-20): the rescue rule is decided on fold 0, so a broken
+    # model is found before days are spent on its other folds, and fold 0 alone gives a first 4-model comparison.
+    # Stable sort: plan order is kept within each fold. Scheduling only; no effect on any result.
+    todo.sort(key=lambda t: t[2])
     return todo, report
 
 
