@@ -139,6 +139,8 @@ def study_grid(plan, jobs, samples):
                     f0 = describe_run(Q.run_dir(model, tag, 0), jobs)
                     r["state"] = "todo" if f0.get("state") == "complete" else "blocked"
                     r["blocked_by"] = None if r["state"] == "todo" else f"fold 0 ({f0.get('state', 'not started')})"
+            if m.get("hold") and r["state"] in ("todo", "blocked"):
+                r["state"], r["blocked_by"] = "blocked", "on hold: " + m["hold"]
             cells.append(r)
         rows.append({"model": model, "tag": tag, "rescue_tag": rescue, "gres": Q.fitting_gres(m), "peak_GB": m.get("peak_GB"), "hold": m.get("hold"),
                      "fold0_default": r0 if rescue else None, "folds": cells})

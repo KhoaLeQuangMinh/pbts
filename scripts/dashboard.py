@@ -204,7 +204,7 @@ def render(s, error=None):
  <div class="tile"><b>{count('running')}</b><span>running</span></div>
  <div class="tile"><b>{count('queued')}</b><span>queued in SLURM</span></div>
  <div class="tile"><b>{count('todo')}</b><span>{'ready to run' if s['training_samples_fixed'] else 'to run (after length is fixed)'}</span></div>
- <div class="tile"><b>{count('blocked')}</b><span>waiting on fold 0</span></div>
+ <div class="tile"><b>{count('blocked')}</b><span>waiting (on fold 0, or model on hold)</span></div>
  <div class="tile"><b style="font-size:15px">{e(samples)}</b><span>training length (samples)</span></div>
  <div class="tile"><b style="font-size:15px">{'running' if srv['queue_daemon_running'] else 'not running'}</b><span>run queue</span></div>
  <div class="tile"><b style="font-size:15px">{'done' if s['locked_test_done'] else 'not yet'}</b><span>locked test (once, at the end)</span></div>
