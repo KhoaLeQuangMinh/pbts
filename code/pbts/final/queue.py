@@ -172,8 +172,16 @@ def status(model, tag, k, jobs):
     return "todo"
 
 
+def machine_of(m, k):
+    """Machine a fold runs on. Plan entry 'machine' is a name, or {"default": name, "<fold>": name, ...}."""
+    mm = m.get("machine", "gpu-a240")
+    if isinstance(mm, dict):
+        return mm.get(str(k), mm.get("default", "gpu-a240"))
+    return mm
+
+
 def assigned(m, machine):
-    return m.get("machine", "gpu-a240") == machine
+    return any(machine_of(m, k) == machine for k in range(C.N_INNER))
 
 
 def plan_runs(plan, jobs, state, samples, machine="gpu-a240"):
@@ -195,10 +203,19 @@ def plan_runs(plan, jobs, state, samples, machine="gpu-a240"):
             report[m["model"]] = "on hold: " + m["hold"]
             continue
         model = m["model"]
-        ext = m.get("fold0_external")       # fold 0 ran on the other machine: {"tag", "verdict", "where"}
+        f0_here = machine_of(m, 0) == machine
+        # fold 0 on the other machine: its verdict is copied into the plan once known, as
+        # {"verdict": "complete" | "not_trainable", "tag": "default" | "rescue_lr3", "lr_factor": 1.0 | 1/3, "where": ...}
+        ext = None if f0_here else m.get("fold0_external")
+        if not f0_here and not ext:
+            report[model] = f"waiting for fold 0 on {machine_of(m, 0)}"
+            continue
+        if ext and ext.get("verdict") == "not_trainable":
+            report[model] = f"NOT TRAINABLE under the protocol (fold 0 on {ext.get('where')})"
+            continue
         base = ext["tag"] if ext else tag_for(model, "default", samples)
         s0 = ext["verdict"] if ext else status(model, base, 0, jobs)
-        tag, lr = base, 1.0
+        tag, lr = base, (ext.get("lr_factor", 1.0) if ext else 1.0)
         if s0 == "rescue":
             tag, lr = tag_for(model, "rescue_lr3", samples), 1 / 3
             s0 = status(model, tag, 0, jobs)
@@ -212,12 +229,13 @@ def plan_runs(plan, jobs, state, samples, machine="gpu-a240"):
         if s0 != "complete":
             report[model] = f"fold 0 ({tag}): {s0}"
             continue
-        sts = {k: status(model, tag, k, jobs) for k in range(1, C.N_INNER)}
+        sts = {k: status(model, tag, k, jobs) for k in range(1, C.N_INNER) if machine_of(m, k) == machine}
         for k, s in sts.items():
             if s in ("todo", "stopped"):
                 todo.append((model, tag, k, lr, m))
         f0 = f"{s0} on {ext['where']}" if ext else s0
-        report[model] = f"recipe '{tag}': " + ", ".join(f"f{k}={s}" for k, s in {0: f0, **sts}.items())
+        report[model] = f"recipe '{tag}': " + ", ".join(f"f{k}={s}" for k, s in {0: f0, **sts}.items()) + \
+            (f" (other folds on the other machine)" if len(sts) < C.N_INNER - 1 else "")
     # Fold 0 of every model before any later fold (2026-11-20): the rescue rule is decided on fold 0, so a broken
     # model is found before days are spent on its other folds, and fold 0 alone gives a first 4-model comparison.
     # Stable sort: plan order is kept within each fold. Scheduling only; no effect on any result.

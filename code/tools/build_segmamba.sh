@@ -7,6 +7,12 @@ P=$(cd "$(dirname "$0")/../.." && pwd)            # project root (holds code/, e
 export CUDA_HOME=${CUDA_HOME:-$P/cuda124}
 export PATH=$CUDA_HOME/bin:$PATH TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.0}" MAX_JOBS=${MAX_JOBS:-8}
 export CAUSAL_CONV1D_FORCE_BUILD=TRUE MAMBA_FORCE_BUILD=TRUE UV_CACHE_DIR=${UV_CACHE_DIR:-$P/.uv_cache}
+# conda's cuda-toolkit (12.8 on blackwell) keeps headers/libs under targets/x86_64-linux, which torch's extension
+# builder does not search; add them (no effect where they are already in $CUDA_HOME/include)
+if [ -d "$CUDA_HOME/targets/x86_64-linux/include" ]; then
+  export CPATH="$CUDA_HOME/targets/x86_64-linux/include${CPATH:+:$CPATH}"
+  export LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+fi
 UV=${UV:-uv}
 $UV pip install -q --python $P/env/bin/python ninja packaging setuptools wheel
 # the unused LM-head import would need `transformers` (see tools/patch_mamba_init.py)

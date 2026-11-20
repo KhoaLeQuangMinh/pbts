@@ -14,7 +14,7 @@ from pbts import config as C
 from pbts import protocol as P
 from pbts.final import queue as Q
 
-TEST_TAGS = ("smoke", "resume_test", "throughput", "smoke128", "smoke_wandb")
+TEST_TAGS = ("smoke", "resume_test", "throughput", "smoke128", "smoke_wandb", "tput_alone", "tput_pair")
 PROVISIONAL_SAMPLES = 100000
 
 
