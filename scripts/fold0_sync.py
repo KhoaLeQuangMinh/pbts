@@ -23,6 +23,7 @@ PLAN = ROOT / "code/plans/main_study.json"
 ROOTS = {"gpu-a240": "/data/khoalq/pbts", "blackwell": "/home/khoalq/pbts"}
 N_FOLDS = 5
 LOG = ROOT / "dashboard" / "fold0_sync.log"
+PENDING = ROOT / "dashboard" / "fold0_sync_pending.json"   # hosts whose queue still has to receive a plan update
 
 
 def log(msg):
@@ -76,7 +77,35 @@ def restart_queue(host):
                     f"--machine {host} >> ../logs/queue.out 2>&1 < /dev/null &"], check=True, timeout=60)
     time.sleep(8)
     alive = ssh(host, 'ps -u khoalq -o args | grep "^../env/bin/python -m pbts.final.queue" || true').strip()
-    log(f"queue on {host} restarted: {'running' if alive else 'NOT RUNNING - check'}")
+    if not alive:
+        raise RuntimeError(f"queue on {host} did not come back up")
+    log(f"queue on {host} restarted: running")
+
+
+def load_pending():
+    return set(json.load(open(PENDING))) if PENDING.exists() else set()
+
+
+def save_pending(hosts):
+    PENDING.write_text(json.dumps(sorted(hosts)) + "\n")
+
+
+def deliver(hosts):
+    """Sync the code (with the updated plan) to each host and restart its queue. A host that cannot be reached stays
+    pending in PENDING and is retried on every pass until it succeeds, so a verdict declared while a server is down
+    still reaches its queue once the server is back."""
+    pending = load_pending() | set(hosts)
+    save_pending(pending)
+    for h in sorted(pending):
+        try:
+            r = subprocess.run(["bash", "scripts/sync.sh", h], cwd=ROOT, capture_output=True, text=True)
+            if r.returncode:
+                raise RuntimeError(f"sync failed: {r.stderr.strip()[-200:]}")
+            restart_queue(h)
+            pending.discard(h)
+            save_pending(pending)
+        except Exception as ex:
+            log(f"{h}: plan update not delivered yet, will retry ({ex})")
 
 
 def once(dry):
@@ -87,27 +116,29 @@ def once(dry):
         others = {machine_of(m, k) for k in range(1, N_FOLDS)} - {f0}
         if not others or m.get("fold0_external", {}).get("verdict") in ("complete", "not_trainable"):
             continue
-        v = verdict(f0, m["model"])
+        try:
+            v = verdict(f0, m["model"])
+        except Exception as ex:                      # one unreachable server must not block the other models
+            log(f"{m['model']}: cannot read fold 0 on {f0} ({ex})")
+            continue
         if v is None:
             continue
         m["fold0_external"] = {**v, "where": f0, "declared": time.strftime("%Y-%m-%dT%H:%M:%S") + " by scripts/fold0_sync.py"}
         changed.append(f"{m['model']}: fold 0 on {f0} -> {v['verdict']} ({v['tag']})")
         restart |= others
-    if not changed:
-        return False
-    log("new fold-0 verdicts: " + "; ".join(changed) + (" [dry run]" if dry else ""))
-    if dry:
-        return True
-    PLAN.write_text(json.dumps(plan, indent=1, ensure_ascii=False) + "\n")
-    msg = "Plan: fold-0 verdicts copied to the other machine\n\n" + "\n".join(changed) + \
-          "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-    subprocess.run(["git", "add", str(PLAN)], cwd=ROOT, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", msg], cwd=ROOT, check=True)
-    subprocess.run(["git", "push", "-q"], cwd=ROOT, check=False)
-    subprocess.run(["bash", "scripts/sync.sh"], cwd=ROOT, check=True, capture_output=True)
-    for h in sorted(restart):
-        restart_queue(h)
-    return True
+    if changed:
+        log("new fold-0 verdicts: " + "; ".join(changed) + (" [dry run]" if dry else ""))
+        if dry:
+            return True
+        PLAN.write_text(json.dumps(plan, indent=1, ensure_ascii=False) + "\n")
+        msg = "Plan: fold-0 verdicts copied to the other machine\n\n" + "\n".join(changed) + \
+              "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+        subprocess.run(["git", "add", str(PLAN)], cwd=ROOT, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", msg], cwd=ROOT, check=True)
+        subprocess.run(["git", "push", "-q"], cwd=ROOT, check=False)
+    if (changed or load_pending()) and not dry:
+        deliver(restart)
+    return bool(changed)
 
 
 def main():
