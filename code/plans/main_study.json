@@ -57,7 +57,14 @@
     "2": "blackwell",
     "4": "blackwell"
    },
-   "hold_later_folds": "until the fold-0 results are reviewed (requested 2026-11-21)"
+   "hold_later_folds": "until the fold-0 results are reviewed (requested 2026-11-21)",
+   "fold0_external": {
+    "verdict": "complete",
+    "tag": "default",
+    "lr_factor": 1.0,
+    "where": "gpu-a240",
+    "declared": "2026-11-22T01:59:16 by scripts/fold0_sync.py"
+   }
   },
   {
    "model": "swinunetr",
