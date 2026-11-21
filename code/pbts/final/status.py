@@ -159,6 +159,8 @@ def study_grid(plan, jobs, samples, machine="gpu-a240"):
                         r["blocked_by"] = None if r["state"] == "todo" else f"fold 0 ({f0.get('state', 'not started')})"
             if m.get("hold") and r["state"] in ("todo", "blocked"):
                 r["state"], r["blocked_by"] = "blocked", "on hold: " + m["hold"]
+            elif k > 0 and m.get("hold_later_folds") and r["state"] in ("todo", "blocked"):
+                r["state"], r["blocked_by"] = "blocked", "on hold: " + m["hold_later_folds"]
             r["machine"] = machine
             cells.append(r)
         rows.append({"model": model, "tag": tag, "rescue_tag": rescue, "gres": Q.fitting_gres(m), "peak_GB": m.get("peak_GB"), "hold": m.get("hold"),

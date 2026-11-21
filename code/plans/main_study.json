@@ -28,7 +28,8 @@
     "lr_factor": 1.0,
     "where": "gpu-a240",
     "declared": "2026-11-21 (COMPLETE.json 2026-11-20T01:16)"
-   }
+   },
+   "hold_later_folds": "until the fold-0 results are reviewed (requested 2026-11-21)"
   },
   {
    "model": "primus_v2b",
@@ -44,7 +45,8 @@
     "lr_factor": 1.0,
     "where": "gpu-a240",
     "declared": "2026-11-21T20:20:32 by scripts/fold0_sync.py"
-   }
+   },
+   "hold_later_folds": "until the fold-0 results are reviewed (requested 2026-11-21)"
   },
   {
    "model": "segmamba",
@@ -54,7 +56,8 @@
     "default": "gpu-a240",
     "2": "blackwell",
     "4": "blackwell"
-   }
+   },
+   "hold_later_folds": "until the fold-0 results are reviewed (requested 2026-11-21)"
   },
   {
    "model": "swinunetr",
@@ -64,7 +67,8 @@
     "default": "blackwell",
     "2": "gpu-a240",
     "4": "gpu-a240"
-   }
+   },
+   "hold_later_folds": "until the fold-0 results are reviewed (requested 2026-11-21)"
   }
  ]
 }

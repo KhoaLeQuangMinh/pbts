@@ -66,6 +66,7 @@ def merge(st):
 
 REASONS = {"QOSMaxJobsPerUserLimit": "waiting for a free job slot (your 2-job limit)",
            "Resources": "waiting for a free GPU", "Priority": "waiting behind other users' jobs",
+           "JobHeldUser": "held until the fold-0 review",
            "None": "", "(None)": ""}
 
 

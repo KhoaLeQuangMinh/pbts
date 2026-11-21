@@ -227,6 +227,9 @@ def plan_runs(plan, jobs, state, samples, machine="gpu-a240"):
         if s0 != "complete":
             report[model] = f"fold 0 ({tag}): {s0}"
             continue
+        if m.get("hold_later_folds"):       # fold 0 runs/resumes as usual; folds 1-4 wait (e.g. for a human review)
+            report[model] = f"fold 0 ({tag}) {s0}; folds 1-4 on hold: {m['hold_later_folds']}"
+            continue
         sts = {k: status(model, tag, k, jobs) for k in range(1, C.N_INNER) if machine_of(m, k) == machine}
         for k, s in sts.items():
             if s in ("todo", "stopped"):
