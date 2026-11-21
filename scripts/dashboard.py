@@ -3,6 +3,10 @@
 
     python3 scripts/dashboard.py            # refresh once and open the page
     python3 scripts/dashboard.py --watch    # keep refreshing every 60 s (Ctrl+C to stop)
+    python3 scripts/dashboard.py --watch --no_open --publish   # + public copy to GitHub Pages every 10 min
+
+The public copy (https://khoalequangminh.github.io/pbts/) holds progress and validation scores only: no error text
+(it can contain addresses), no job ids or node names, no usage of the shared servers.
 
 Fetches read-only status from both servers (python -m pbts.final.status --machine <name> over ssh), merges them
 (each fold is shown by the machine it is assigned to) and writes dashboard/index.html, which reloads itself every
@@ -20,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "dashboard" / "index.html"
 CACHE = ROOT / "dashboard" / "last_status.json"
+PAGES_DIR = ROOT / "dashboard" / "pages"      # separate git checkout of branch gh-pages (public copy only)
 MACHINES = {"gpu-a240": "/data/khoalq/pbts", "blackwell": "/home/khoalq/pbts"}
 STATE_LABEL = {"complete": "done", "running": "running", "queued": "queued", "todo": "to run", "blocked": "waiting",
                "rescue": "rescue triggered", "incomplete": "incomplete", "stopped": "stopped", "unknown": "no status"}
@@ -54,7 +59,8 @@ def merge(st):
            "jobs": [{**j, "machine": m} for m, s in st.items() for j in s["jobs"]],
            "pilot_and_extra": [{**r, "machine": m} for m, s in st.items() for r in s["pilot_and_extra"]],
            "tests": [{**r, "machine": m} for m, s in st.items() for r in s["tests"]],
-           "generated": " · ".join(f"{m} {s['generated'][11:16]}" for m, s in st.items())}
+           "generated": " · ".join(f"{m} {s['generated'][11:16]}" for m, s in st.items()),
+           "generated_full": {m: s["generated"] for m, s in st.items()}}
     return out
 
 
@@ -92,8 +98,10 @@ def dice_chips(last):
     return "".join(out)
 
 
-def run_card(r, title):
-    job = r.get("job") or {}
+def run_card(r, title, public=False):
+    job = dict(r.get("job") or {})
+    if public:
+        job.pop("id", None)
     ep, n = r.get("epoch"), r.get("num_epochs")
     last = r.get("last") or {}
     mon = r.get("monitor") or {}
@@ -134,7 +142,7 @@ def cell(r, length_fixed=True):
     return f'<td class="s-{st}"><b>{STATE_LABEL.get(st, st)}</b><small>{e(sub)}</small>{mach}</td>'
 
 
-def next_actions(s):
+def next_actions(s, public=False):
     acts = []
     grid = s["grid"]
     if not s["training_samples_fixed"]:
@@ -161,7 +169,8 @@ def next_actions(s):
     if pend:
         acts.append("Pending SLURM jobs: " + ", ".join(f"{j['name']} ({reason(j['reason'])})" for j in pend))
     for m, err in s.get("errors", {}).items():
-        acts.append(f"{m}: could not refresh ({err[:160]}); showing its last known status.")
+        acts.append(f"{m}: could not be reached; showing its last known status." if public else
+                    f"{m}: could not refresh ({err[:160]}); showing its last known status.")
     return acts or ["Nothing needs attention."]
 
 
@@ -200,7 +209,21 @@ td.s-unknown{background:var(--warn)}
 """
 
 
-def render(s, error=None):
+PUBLIC_INTRO = (
+    "Four adult brain-tumour segmentation models (nnU-Net ResEnc L, PrimusV2-B, SegMamba, Swin UNETR), retrained "
+    "from scratch under identical conditions on paediatric scans (BraTS-PEDs 2026), 5-fold cross-validation on 234 "
+    "development scans. Scores below are on each fold's validation scans during development; the 60-scan locked test "
+    "is evaluated once, at the end. Plan and code: <a href='https://github.com/KhoaLeQuangMinh/pbts'>github.com/"
+    "KhoaLeQuangMinh/pbts</a> (<a href='https://github.com/KhoaLeQuangMinh/pbts/blob/main/docs/PLAN.md'>study plan</a>).")
+
+# Shows how old the snapshot is in the viewer's own clock, and warns when it stops being updated.
+PUBLIC_AGE_JS = """<script>(function(){var el=document.getElementById('age');if(!el)return;
+var t=Date.parse(el.dataset.ts);function f(){var m=Math.round((Date.now()-t)/60000);
+el.textContent=m<1?'just now':m<120?m+' min ago':Math.round(m/60)+' h ago';
+document.getElementById('stale').style.display=m>45?'block':'none';}f();setInterval(f,30000);})();</script>"""
+
+
+def render(s, error=None, public=False):
     grid = s["grid"]
     cells = [c for row in grid for c in row["folds"]]
     n_total = len(cells)
@@ -233,10 +256,29 @@ def render(s, error=None):
                     for r in s["tests"])
     samples = f"{s['training_samples']:,}" if s["training_samples_fixed"] else f"not fixed yet (provisional {s['provisional_samples']:,})"
     errs = dict(s.get("errors") or {}, **({"all": error} if error else {}))
-    banner = "".join(f'<div class="banner">{e(m)}: could not refresh ({e(x[:200])}); showing its last known status.</div>' for m, x in errs.items())
+    if public:      # no error text (it can hold addresses), no job ids/nodes, no shared-server usage
+        banner = "".join(f'<div class="banner">{e(m)} could not be reached at the last update; showing its last known status.</div>' for m in errs)
+        gen = s.get("generated_full") or {}
+        newest = max(gen.values()) if gen else ""
+        top = (f'<div class="top"><h1>PBTS study status</h1><span class="muted">status at {e(newest[:10])} '
+               f'{e(" · ".join(f"{m} {t[11:16]}" for m, t in gen.items()))} UTC (<span id="age" data-ts="{e(newest)}Z"></span>) '
+               f'· updated about every 10 minutes</span></div><p class="muted" style="max-width:860px">{PUBLIC_INTRO}</p>'
+               f'<div class="banner" id="stale" style="display:none">This snapshot has not been updated for a while; '
+               f'the computer that publishes it may be offline. Training keeps running on the servers.</div>')
+        refresh_s, jobs_html, servers_html, tests_html, script = 300, "", "", "", PUBLIC_AGE_JS
+    else:
+        banner = "".join(f'<div class="banner">{e(m)}: could not refresh ({e(x[:200])}); showing its last known status.</div>' for m, x in errs.items())
+        top = f'<div class="top"><h1>PBTS study status</h1><span class="muted">status at {e(s["generated"])} · page reloads every minute</span></div>'
+        refresh_s, script = 60, ""
+        jobs_html = (f'<h2>Jobs (yours)</h2><div class="tablewrap"><table class="plain"><tr><th>machine</th><th>job</th><th>name</th><th>state</th>'
+                     f'<th>GPU</th><th>elapsed</th><th>time left</th><th>reason / node</th></tr>{jobs}</table></div>')
+        servers_html = (f'<h2>Servers</h2><div class="tablewrap"><table class="plain"><tr><th>machine</th><th>GPU</th><th>model</th>'
+                        f'<th>memory</th><th>utilisation</th></tr>{gpus}</table></div>{disks}')
+        tests_html = (f"<details><summary>Test and smoke runs ({len(s['tests'])})</summary><table class=\"plain\"><tr><th>run</th>"
+                      f"<th>state</th><th>last event</th></tr>{tests}</table></details>")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="60"><title>PBTS study status</title><style>{CSS}</style></head><body><main>
-<div class="top"><h1>PBTS study status</h1><span class="muted">status at {e(s['generated'])} · page reloads every minute</span></div>
+<meta http-equiv="refresh" content="{refresh_s}"><title>PBTS study status</title><style>{CSS}</style></head><body><main>
+{top}
 {banner}
 <div class="tiles">
  <div class="tile"><b>{count('complete')}/{n_total}</b><span>main-study runs done</span></div>
@@ -248,16 +290,15 @@ def render(s, error=None):
  <div class="tile"><b style="font-size:13px">{e(queues)}</b><span>run queues</span></div>
  <div class="tile"><b style="font-size:15px">{'done' if s['locked_test_done'] else 'not yet'}</b><span>locked test (once, at the end)</span></div>
 </div>
-<h2>Needs attention / next</h2><ul class="acts">{''.join(f'<li>{e(a)}</li>' for a in next_actions(s))}</ul>
-<h2>Running now</h2><div class="cards">{''.join(run_card(r, t) for t, r in running) or '<p class="muted">Nothing running.</p>'}</div>
+<h2>Needs attention / next</h2><ul class="acts">{''.join(f'<li>{e(a)}</li>' for a in next_actions(s, public))}</ul>
+<h2>Running now</h2><div class="cards">{''.join(run_card(r, t, public) for t, r in running) or '<p class="muted">Nothing running.</p>'}</div>
 <h2>Main study: models × inner folds</h2><div class="tablewrap"><table><tr><th></th>{''.join(f'<th>fold {k}</th>' for k in range(5))}</tr>{matrix}</table></div>
 <p class="muted" style="font-size:12px">Each cell names the machine it runs on (folds of every model are spread over gpu-a240 and blackwell). Fold 0 of every model runs first; folds 1–4 start only after fold 0 passes the rescue check, wherever it ran. ResEnc fold 0 is the whole-head pilot run.</p>
 <h2>Pilot and other runs</h2><div class="tablewrap"><table class="plain"><tr><th>run</th><th>state</th><th>epoch</th><th>ETA</th><th>last event</th></tr>{extra}</table></div>
-<h2>Jobs (yours)</h2><div class="tablewrap"><table class="plain"><tr><th>machine</th><th>job</th><th>name</th><th>state</th><th>GPU</th><th>elapsed</th><th>time left</th><th>reason / node</th></tr>{jobs}</table></div>
-<h2>Servers</h2><div class="tablewrap"><table class="plain"><tr><th>machine</th><th>GPU</th><th>model</th><th>memory</th><th>utilisation</th></tr>{gpus}</table></div>
-{disks}
-<details><summary>Test and smoke runs ({len(s['tests'])})</summary><table class="plain"><tr><th>run</th><th>state</th><th>last event</th></tr>{tests}</table></details>
-</main></body></html>"""
+{jobs_html}
+{servers_html}
+{tests_html}
+</main>{script}</body></html>"""
 
 
 def refresh():
@@ -284,7 +325,32 @@ def refresh():
     merged = merge(st)
     merged["errors"] = errors
     OUT.write_text(render(merged))
-    return not errors
+    return merged
+
+
+def git(*args, check=True):
+    r = subprocess.run(["git", *args], cwd=PAGES_DIR, capture_output=True, text=True, timeout=120)
+    if check and r.returncode:
+        raise RuntimeError(f"git {args[0]}: {r.stderr.strip()[-300:]}")
+    return r.stdout.strip()
+
+
+def publish(merged):
+    """Public copy (render(public=True): progress and validation scores only) -> branch gh-pages of this repo's
+    GitHub remote -> https://<owner>.github.io/<repo>/. The branch always holds ONE commit (amended and force-pushed),
+    so its history does not grow."""
+    PAGES_DIR.mkdir(parents=True, exist_ok=True)
+    if not (PAGES_DIR / ".git").exists():
+        git("init", "-q")
+        git("checkout", "-q", "-b", "gh-pages")
+        url = subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+        git("remote", "add", "origin", url)
+    (PAGES_DIR / "index.html").write_text(render(merged, public=True))
+    (PAGES_DIR / ".nojekyll").write_text("")
+    git("add", "-A")
+    has_head = git("rev-parse", "-q", "--verify", "HEAD", check=False) != ""
+    git("commit", "-q", *(["--amend"] if has_head else []), "-m", f"Study status {time.strftime('%Y-%m-%dT%H:%M:%S')}")
+    git("push", "-q", "-f", "origin", "HEAD:gh-pages")
 
 
 def main():
@@ -292,15 +358,32 @@ def main():
     ap.add_argument("--watch", action="store_true")
     ap.add_argument("--every", type=int, default=60)
     ap.add_argument("--no_open", action="store_true")
+    ap.add_argument("--publish", action="store_true", help="also publish the public copy to GitHub Pages")
+    ap.add_argument("--publish_every", type=int, default=600, help="seconds (GitHub Pages allows ~10 builds/hour)")
     a = ap.parse_args()
-    refresh()
+    last_pub = 0.0
+
+    def maybe_publish(merged):
+        nonlocal last_pub
+        if a.publish and merged and time.time() - last_pub >= a.publish_every:
+            try:
+                publish(merged)
+                last_pub = time.time()
+                print(time.strftime("%H:%M:%S"), "published")
+            except Exception as ex:
+                print(time.strftime("%H:%M:%S"), "publish failed:", ex, file=sys.stderr)
+
+    merged = refresh()
+    maybe_publish(merged)
     if not a.no_open:
         webbrowser.open(OUT.as_uri())
     print(f"dashboard: {OUT}")
     while a.watch:
         time.sleep(a.every)
-        ok = refresh()
+        merged = refresh()
+        ok = bool(merged) and not merged.get("errors")
         print(time.strftime("%H:%M:%S"), "refreshed" if ok else "refresh failed (showing last data)")
+        maybe_publish(merged)
 
 
 if __name__ == "__main__":
