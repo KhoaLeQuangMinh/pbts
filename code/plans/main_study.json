@@ -1,19 +1,70 @@
 {
-  "note": "Main study order (ResEnc -> Primus -> SegMamba -> Swin UNETR), fold 0 of every model first. ResEnc fold 0 is the whole-head pilot run (tag 'default'). Training length comes from protocol.TRAINING_SAMPLES. GPU on gpu-a240: the queue picks the smallest free GPU that fits peak_GB x 1.15 + 1 GiB (10 GB slice < 20 GB slice < full A100; see queue.fitting_gres); on blackwell a job starts only when the GPU has that much free memory. peak_GB = measured torch max_memory_allocated in a training step at the configuration and batch size the model trains with. MACHINES (2026-11-21): each model's folds are spread over both machines, so any small machine difference averages out instead of lining up with one model; 'machine' maps fold -> machine. A fold 0 that ran on the other machine is declared in 'fold0_external' (verdict, tag, lr_factor) once it has finished; until then that machine's later folds wait.",
-  "wandb": true,
-  "machines": {
-    "gpu-a240": {"backend": "slurm", "max_jobs": 2},
-    "blackwell": {"backend": "local", "max_jobs": 1, "gpu_GB": 47.0}
+ "note": "Main study order (ResEnc -> Primus -> SegMamba -> Swin UNETR), fold 0 of every model first. ResEnc fold 0 is the whole-head pilot run (tag 'default'). Training length comes from protocol.TRAINING_SAMPLES. GPU on gpu-a240: the queue picks the smallest free GPU that fits peak_GB x 1.15 + 1 GiB (10 GB slice < 20 GB slice < full A100; see queue.fitting_gres); on blackwell a job starts only when the GPU has that much free memory. peak_GB = measured torch max_memory_allocated in a training step at the configuration and batch size the model trains with. MACHINES (2026-11-21): each model's folds are spread over both machines, so any small machine difference averages out instead of lining up with one model; 'machine' maps fold -> machine. A fold 0 that ran on the other machine is declared in 'fold0_external' (verdict, tag, lr_factor) once it has finished; until then that machine's later folds wait.",
+ "wandb": true,
+ "machines": {
+  "gpu-a240": {
+   "backend": "slurm",
+   "max_jobs": 2
   },
-  "models": [
-    {"model": "nnunet_resenc_l", "peak_GB": 18.1, "peak_source": "pilot run default/fold_0, 3d_wholehead, batch 2 (128^3 would be 6.2)",
-     "machine": {"default": "gpu-a240", "1": "blackwell", "3": "blackwell"},
-     "fold0_external": {"verdict": "complete", "tag": "default", "lr_factor": 1.0, "where": "gpu-a240", "declared": "2026-11-21 (COMPLETE.json 2026-11-20T01:16)"}},
-    {"model": "primus_v2b", "peak_GB": 13.9, "peak_source": "smoke run primus_v2b/smoke, 3d_wholehead, batch 1",
-     "machine": {"default": "gpu-a240", "4": "blackwell"}},
-    {"model": "segmamba", "peak_GB": 23.2, "peak_source": "smoke run segmamba/smoke (job 2745), 3d_wholehead, batch 1; batch 2 OOM on 40 GB",
-     "machine": {"default": "gpu-a240", "2": "blackwell", "4": "blackwell"}},
-    {"model": "swinunetr", "peak_GB": 17.6, "peak_source": "smoke run swinunetr/smoke (job 2750, COMPLETE), 3d_wholehead, batch 1; ran out of memory on the 20 GB slice (job 2740)",
-     "machine": {"default": "blackwell", "2": "gpu-a240", "4": "gpu-a240"}}
-  ]
+  "blackwell": {
+   "backend": "local",
+   "max_jobs": 1,
+   "gpu_GB": 47.0
+  }
+ },
+ "models": [
+  {
+   "model": "nnunet_resenc_l",
+   "peak_GB": 18.1,
+   "peak_source": "pilot run default/fold_0, 3d_wholehead, batch 2 (128^3 would be 6.2)",
+   "machine": {
+    "default": "gpu-a240",
+    "1": "blackwell",
+    "3": "blackwell"
+   },
+   "fold0_external": {
+    "verdict": "complete",
+    "tag": "default",
+    "lr_factor": 1.0,
+    "where": "gpu-a240",
+    "declared": "2026-11-21 (COMPLETE.json 2026-11-20T01:16)"
+   }
+  },
+  {
+   "model": "primus_v2b",
+   "peak_GB": 13.9,
+   "peak_source": "smoke run primus_v2b/smoke, 3d_wholehead, batch 1",
+   "machine": {
+    "default": "gpu-a240",
+    "4": "blackwell"
+   },
+   "fold0_external": {
+    "verdict": "complete",
+    "tag": "default",
+    "lr_factor": 1.0,
+    "where": "gpu-a240",
+    "declared": "2026-11-21T20:20:32 by scripts/fold0_sync.py"
+   }
+  },
+  {
+   "model": "segmamba",
+   "peak_GB": 23.2,
+   "peak_source": "smoke run segmamba/smoke (job 2745), 3d_wholehead, batch 1; batch 2 OOM on 40 GB",
+   "machine": {
+    "default": "gpu-a240",
+    "2": "blackwell",
+    "4": "blackwell"
+   }
+  },
+  {
+   "model": "swinunetr",
+   "peak_GB": 17.6,
+   "peak_source": "smoke run swinunetr/smoke (job 2750, COMPLETE), 3d_wholehead, batch 1; ran out of memory on the 20 GB slice (job 2740)",
+   "machine": {
+    "default": "blackwell",
+    "2": "gpu-a240",
+    "4": "gpu-a240"
+   }
+  }
+ ]
 }
