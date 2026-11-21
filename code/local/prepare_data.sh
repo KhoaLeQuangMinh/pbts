@@ -2,7 +2,7 @@
 # Prepare the study data on another machine exactly as on gpu-a240 (every step is deterministic, same code, same
 # package versions), then fingerprint it for the file-by-file comparison with gpu-a240:
 #   python tools/data_fingerprint.py --compare <gpu-a240.json> <this machine's .json>
-# Needs the Kaggle download in data/kagglehub_cache (download.py). Usage: MACHINE=blackwell bash local/prepare_data.sh
+# Needs the Kaggle download in data/kagglehub_cache (python -m pbts.data.download). Usage: MACHINE=blackwell bash local/prepare_data.sh
 set -euo pipefail
 P=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$P/code"
