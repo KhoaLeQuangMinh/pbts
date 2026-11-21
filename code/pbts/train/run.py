@@ -152,19 +152,17 @@ def completeness(run_dir: Path, cfg: dict):
     return missing
 
 
-def _process_alive(info):
-    """Is the process that wrote a lock still alive? (same host: check its pid; SLURM job: ask squeue)."""
+def _process_alive(info, written_at=None):
+    """Is the process that wrote a lock still alive? (SLURM job: ask squeue; same host: its pid must run AND have
+    started before the lock was written, since a pid can be reused after a reboot, see pbts.proc)."""
     job = info.get("slurm_job_id")
     if job:
         import subprocess
         out = subprocess.run(["squeue", "-h", "-j", str(job)], capture_output=True, text=True).stdout
         return bool(out.strip())
     if info.get("host") == os.uname().nodename and info.get("pid"):
-        try:
-            os.kill(int(info["pid"]), 0)
-            return True
-        except OSError:
-            return False
+        from pbts import proc
+        return proc.alive(info["pid"], written_at)
     return True
 
 
@@ -209,7 +207,7 @@ def main():
     if lock.exists():
         old = json.load(open(lock))
         same_job = old.get("slurm_job_id") and old.get("slurm_job_id") == os.environ.get("SLURM_JOB_ID")
-        if not same_job and _process_alive(old):
+        if not same_job and _process_alive(old, lock.stat().st_mtime):
             sys.exit(f"{run_dir} is locked by {old}: another process is running this run")
     json.dump({"slurm_job_id": os.environ.get("SLURM_JOB_ID"), "pid": os.getpid(), "host": os.uname().nodename,
                "started": time.strftime("%Y-%m-%dT%H:%M:%S")}, open(lock, "w"))

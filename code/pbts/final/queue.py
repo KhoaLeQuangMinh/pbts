@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 from pbts import config as C
+from pbts import proc
 from pbts import protocol as P
 
 STATE = C.ROOT / "logs" / "queue_state.json"
@@ -68,13 +69,10 @@ def log(msg):
 
 
 # ------------------------------------------------------------------ job lists (per backend)
-def _pid_alive(pid) -> bool:
-    """Running (not a zombie) process on THIS machine."""
-    try:
-        st = open(f"/proc/{int(pid)}/stat").read()
-        return st.rsplit(")", 1)[1].split()[0] != "Z"
-    except (OSError, ValueError, IndexError):
-        return False
+def _pid_alive(pid, recorded_at=None) -> bool:
+    """Running (not a zombie) process on THIS machine that started before `recorded_at` (pbts.proc: a pid can be
+    reused after a reboot)."""
+    return proc.alive(pid, recorded_at)
 
 
 def slurm_jobs():
@@ -99,7 +97,7 @@ def local_jobs():
             j = json.load(open(f))
         except Exception:
             continue
-        if _pid_alive(j.get("pid")):
+        if _pid_alive(j.get("pid"), f.stat().st_mtime):
             jobs.append({"id": str(j["pid"]), "name": j["name"], "state": "RUNNING", "gres": "local"})
     return jobs
 
@@ -144,7 +142,7 @@ def lock_alive(d: Path, jobs) -> bool:
         return True
     job = lock.get("slurm_job_id")
     if job is None:                           # started without SLURM: alive only if its process still runs here
-        return _pid_alive(lock.get("pid"))
+        return _pid_alive(lock.get("pid"), lk.stat().st_mtime)
     return any(j["id"] == str(job) for j in jobs)
 
 

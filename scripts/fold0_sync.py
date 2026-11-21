@@ -10,6 +10,9 @@ jobs are not touched).
     python3 scripts/fold0_sync.py               # once
     python3 scripts/fold0_sync.py --dry_run     # show what it would do
     python3 scripts/fold0_sync.py --watch       # every 15 minutes
+
+It also restarts a machine's run queue when that machine rebooted after the queue last logged (the queue then
+resumes the interrupted runs from their last checkpoint). A queue that stopped by itself is left alone.
 """
 import argparse
 import json
@@ -82,6 +85,15 @@ def restart_queue(host):
     log(f"queue on {host} restarted: running")
 
 
+def queue_killed_by_reboot(host):
+    """True if no run queue is running on `host` and the machine booted after the queue last wrote to its log, i.e.
+    the queue was killed by a reboot rather than having stopped by itself. Raises if the host is unreachable."""
+    out = ssh(host, f'ps -u khoalq -o args | grep -c "^../env/bin/python -m pbts.final.queue"; grep "^btime" /proc/stat; '
+                    f'stat -c %Y {ROOTS[host]}/logs/queue.out 2>/dev/null || echo 0').split()
+    n_queues, boot, last_log = int(out[0]), int(out[2]), int(out[3])
+    return n_queues == 0 and boot > last_log
+
+
 def load_pending():
     return set(json.load(open(PENDING))) if PENDING.exists() else set()
 
@@ -136,7 +148,15 @@ def once(dry):
         subprocess.run(["git", "add", str(PLAN)], cwd=ROOT, check=True)
         subprocess.run(["git", "commit", "-q", "-m", msg], cwd=ROOT, check=True)
         subprocess.run(["git", "push", "-q"], cwd=ROOT, check=False)
-    if (changed or load_pending()) and not dry:
+    for h in ROOTS:                                  # a reboot kills the queue; bring it back (its jobs then resume)
+        try:
+            if queue_killed_by_reboot(h):
+                log(f"{h} rebooted after its run queue last logged -> restarting the queue "
+                    f"(interrupted runs resume from their last checkpoint)" + (" [dry run]" if dry else ""))
+                restart.add(h)
+        except Exception:
+            pass                                     # unreachable: checked again next pass
+    if (changed or restart or load_pending()) and not dry:
         deliver(restart)
     return bool(changed)
 
