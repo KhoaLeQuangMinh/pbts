@@ -565,7 +565,7 @@ def main():
     lw["gap"] = (lw[a0] - lw[b0]).abs()
     info = d[d.model == a0].set_index(["case", "region"])
     pp = d.pivot_table(index=["case", "region"], columns="model", values="pred_present", aggfunc="first")
-    lw["gt"] = [bool(info.loc[(c, r), "gt_present"]) for c, r in zip(lw.case, lw.region)]
+    lw["truth_has_it"] = [bool(info.loc[(c, r), "gt_present"]) for c, r in zip(lw.case, lw.region)]
 
     def what(c, r):
         if not info.loc[(c, r), "gt_present"]:
@@ -573,7 +573,7 @@ def main():
         return "both miss it entirely" if not pp.loc[(c, r)].astype(bool).any() else "both score below 0.5"
     picks = []
     for r, present in (("CC", True), ("CC", False), ("ED", True), ("ED", False), ("ET", None), ("WT", None)):
-        x = lw[(lw.region == r) & lw.both_fail & ((lw.gt == present) if present is not None else True)]
+        x = lw[(lw.region == r) & lw.both_fail & ((lw["truth_has_it"] == present) if present is not None else True)]
         x = x.assign(m=lambda t: t[[a0, b0]].mean(axis=1)).sort_values("m")
         picks += [(c, r, "shared", f"{c} · {r}: {what(c, r)} (lesion-wise {x.loc[i, a0]:.2f} / {x.loc[i, b0]:.2f})")
                   for i, c in zip(x.index[:1], x.case[:1])]
