@@ -7,6 +7,8 @@ Models, all trained from scratch with their authors' own optimiser recipes: **nn
 Swin UNETR**. Everything else is shared by every model: data, split, whole-head input, augmentation, loss, training
 length, prediction and scoring.
 
+**Live progress of every run:** https://khoalequangminh.github.io/pbts/ (updated about every 10 minutes).
+
 **Start with [docs/PLAN.md](docs/PLAN.md).** It lists every decision, why it was made, and where it lives in the code.
 The binding training settings, with dated amendments, are in [code/pbts/protocol.py](code/pbts/protocol.py).
 
