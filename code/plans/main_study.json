@@ -75,7 +75,14 @@
     "2": "gpu-a240",
     "4": "gpu-a240"
    },
-   "hold_later_folds": "until the fold-0 results are reviewed (requested 2026-11-21)"
+   "hold_later_folds": "until the fold-0 results are reviewed (requested 2026-11-21)",
+   "fold0_external": {
+    "verdict": "complete",
+    "tag": "default",
+    "lr_factor": 1.0,
+    "where": "blackwell",
+    "declared": "2026-11-24T15:19:59 by scripts/fold0_sync.py"
+   }
   }
  ]
 }
